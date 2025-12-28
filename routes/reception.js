@@ -40,6 +40,7 @@ router.post("/payments/verify", paymentController.verifyPaymentByReception);
 const userPanelRouter = express.Router();
 userPanelRouter.use(authWithReception);
 userPanelRouter.get("/products", receptionController.getUserProducts);
+userPanelRouter.post("/products/price-add",receptionController.addPrice)
 userPanelRouter.post("/orders", receptionController.createOrderAsReception);
 
 router.use("/user-panel", userPanelRouter);

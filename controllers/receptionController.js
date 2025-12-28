@@ -312,10 +312,48 @@ const receptionController = {
     }
   },
 
+  addPrice: async (req, res) => {
+    try {
+      if (!req.isReceptionAccess) {
+        return res.status(403).json({ error: "Invalid Access Type" });
+      }
 
+      const { productId, price } = req.body;
 
+      if (!productId || price == null || price < 0) {
+        return res.status(400).json({
+          status: false,
+          message: "Product id and valid price are required"
+        });
+      }
 
+      const product = await Product.findOneAndUpdate(
+        { _id: productId, isActive: true },
+        { $set: { originalPrice: price } },
+        { new: true }
+      );
 
+      if (!product) {
+        return res.status(404).json({
+          status: false,
+          message: "Product not found"
+        });
+      }
+
+      return res.status(200).json({
+        status: true,
+        message: "Price updated successfully",
+        data: product
+      });
+
+    } catch (error) {
+      console.error("Error while adding the price", error);
+      return res.status(500).json({
+        status: false,
+        message: "Internal Server Error"
+      });
+    }
+  },
 
   createOrderAsReception: async (req, res) => {
     try {
