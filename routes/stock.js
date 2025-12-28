@@ -137,7 +137,7 @@ router.delete("/cap/:id", stockController.deleteCap);
 // ============= PREFORM PRODUCTION =============
 router.post("/production/preform", stockController.recordPreformProduction);
 router.get("/production/preform", stockController.getPreformProductionsWithReport);
-router.get("/production/preform/:id",stockController.getPreformProductionsLog)
+router.get("/production/preform/:id", stockController.getPreformProductionsLog)
 router.get("/preforms/available-types", stockController.getAvailablePreformTypesForBottle);
 router.get("/preforms/available", stockController.getAvailablePreforms);
 router.get("/preforms/types", stockController.getPreformTypes);
@@ -151,8 +151,9 @@ router.get("/caps/types", stockController.getCapTypes);
 
 // ============= BOTTLE PRODUCTION =============
 router.post("/production/bottle", stockController.recordBottleProduction);
+router.get("/production/bottle/category", stockController.getBottleCategory)
 router.get("/production/bottle", stockController.getBottleProductions);
-router.get("/production/check-availability", stockController.checkMaterialAvailability);
+router.post("/production/check-availability", stockController.checkMaterialAvailability);
 router.get("/production/check-bottle-availability", stockController.checkBottleProductionAvailability);
 
 // ============= PRODUCTION OUTCOME (GENERAL) =============

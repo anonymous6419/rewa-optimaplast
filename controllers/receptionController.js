@@ -5,6 +5,7 @@ const path = require("path");
 const jwt = require("jsonwebtoken");
 const Attendance = require("../models/Attendance");
 const cloudinary = require("../config/cloudinary");
+const Counter = require("../models/Counter");
 const Product = require("../models/Product");
 const Payment = require("../models/Payment");
 const streamifier = require("streamifier");
@@ -12,19 +13,14 @@ const mongoose = require("mongoose");
 const ExcelJS = require("exceljs");
 
 const generateUserCode = async () => {
-  let userCode;
-  let isUnique = false;
+  const counter = await Counter.findOneAndUpdate(
+    { name: "USER" },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
 
-  while (!isUnique) {
-    userCode = `USER-${Math.floor(100000 + Math.random() * 900000)}`; // Example: OPT123456
-    const existingUser = await User.findOne({
-      "customerDetails.userCode": userCode,
-    });
-    if (!existingUser) {
-      isUnique = true;
-    }
-  }
-  return userCode;
+  const paddedNumber = String(counter.seq).padStart(6, "0");
+  return `USER-${paddedNumber}`;
 };
 
 const getMiscellaneousUser = async (email) => {
@@ -54,123 +50,123 @@ const calculateDeliveryCharge = (boxes, deliveryChoice, pinCode) => {
 };
 
 const receptionController = {
-  
+
 
 
   createCustomer: async (req, res) => {
-  try {
-    const {
-      name,
-      email,
-      phoneNumber,
-      password,
-      firmName,
-      gstNumber,
-      panNumber,
-      address,
-    } = req.body;
-
-    if (
-      !name ||
-      !firmName ||
-      !phoneNumber ||
-      !password ||
-      !address
-    ) {
-      if (req.file) {
-        await fs.unlink(req.file.path);
-      }
-      return res.status(400).json({
-        error: "Missing required fields",
-        details: {
-          name: !name,
-          firmName: !firmName,
-          phoneNumber: !phoneNumber,
-          password: !password,
-          address: !address,
-        },
-      });
-    }
-
-    // Check if user exists by phone number (since email is optional)
-    let existingUser;
-    if (email) {
-      existingUser = await User.findOne({ email });
-    } else {
-      // If no email, check by phone number
-      existingUser = await User.findOne({ phoneNumber });
-    }
-
-    if (existingUser) {
-      if (req.file) {
-        await fs.unlink(req.file.path);
-      }
-      return res.status(400).json({ error: "User already registered with this email or phone number" });
-    }
-
-    const userCode = await generateUserCode();
-
-    let photoUrl = null;
-    if (req.file) {
-      photoUrl = `/uploads/profile-photos/${req.file.filename}`;
-      try {
-        await fs.access(
-          path.join(
-            __dirname,
-            "..",
-            "uploads/profile-photos",
-            req.file.filename
-          )
-        );
-      } catch (err) {
-        console.error("File access error:", err);
-        return res.status(500).json({ error: "File upload failed" });
-      }
-    }
-
-    // Create user with email or dummy email
-    const user = new User({
-      name,
-      email: email || `${phoneNumber}@customer.com`, // Use dummy email if not provided
-      phoneNumber,
-      password,
-      role: "user",
-      customerDetails: {
+    try {
+      const {
+        name,
+        email,
+        phoneNumber,
+        password,
         firmName,
         gstNumber,
         panNumber,
         address,
-        photo: photoUrl,
-        userCode,
-      },
-    });
+      } = req.body;
 
-    await user.save();
+      if (
+        !name ||
+        !firmName ||
+        !phoneNumber ||
+        !password ||
+        !address
+      ) {
+        if (req.file) {
+          await fs.unlink(req.file.path);
+        }
+        return res.status(400).json({
+          error: "Missing required fields",
+          details: {
+            name: !name,
+            firmName: !firmName,
+            phoneNumber: !phoneNumber,
+            password: !password,
+            address: !address,
+          },
+        });
+      }
 
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
+      // Check if user exists by phone number (since email is optional)
+      let existingUser;
+      if (email) {
+        existingUser = await User.findOne({ email });
+      } else {
+        // If no email, check by phone number
+        existingUser = await User.findOne({ phoneNumber });
+      }
 
-    const userResponse = user.toObject();
-    delete userResponse.password;
+      if (existingUser) {
+        if (req.file) {
+          await fs.unlink(req.file.path);
+        }
+        return res.status(400).json({ error: "User already registered with this email or phone number" });
+      }
 
-    res.status(201).json({
-      message: "Customer registered successfully",
-      user: userResponse,
-      token,
-      userCode: user.customerDetails.userCode,
-    });
-  } catch (error) {
-    console.error("Registration error:", error);
-    if (req.file) {
-      await fs.unlink(req.file.path).catch(console.error);
+      const userCode = await generateUserCode();
+
+      let photoUrl = null;
+      if (req.file) {
+        photoUrl = `/uploads/profile-photos/${req.file.filename}`;
+        try {
+          await fs.access(
+            path.join(
+              __dirname,
+              "..",
+              "uploads/profile-photos",
+              req.file.filename
+            )
+          );
+        } catch (err) {
+          console.error("File access error:", err);
+          return res.status(500).json({ error: "File upload failed" });
+        }
+      }
+
+      // Create user with email or dummy email
+      const user = new User({
+        name,
+        email: email || `${phoneNumber}@customer.com`, // Use dummy email if not provided
+        phoneNumber,
+        password,
+        role: "user",
+        customerDetails: {
+          firmName,
+          gstNumber,
+          panNumber,
+          address,
+          photo: photoUrl,
+          userCode,
+        },
+      });
+
+      await user.save();
+
+      const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+        expiresIn: "7d",
+      });
+
+      const userResponse = user.toObject();
+      delete userResponse.password;
+
+      res.status(201).json({
+        message: "Customer registered successfully",
+        user: userResponse,
+        token,
+        userCode: user.customerDetails.userCode,
+      });
+    } catch (error) {
+      console.error("Registration error:", error);
+      if (req.file) {
+        await fs.unlink(req.file.path).catch(console.error);
+      }
+      res.status(500).json({
+        error: "Error creating customer",
+        details: error.message,
+      });
     }
-    res.status(500).json({
-      error: "Error creating customer",
-      details: error.message,
-    });
-  }
-},
+  },
 
   getAllUsers: async (req, res) => {
     try {
@@ -316,218 +312,218 @@ const receptionController = {
     }
   },
 
- 
+
 
 
 
 
   createOrderAsReception: async (req, res) => {
-  try {
-    if (!req.isReceptionAccess) {
-      return res.status(403).json({ error: "Invalid access type" });
-    }
+    try {
+      if (!req.isReceptionAccess) {
+        return res.status(403).json({ error: "Invalid access type" });
+      }
 
-    const {
-      products,
-      paymentMethod,
-      name,
-      mobileNo,
-      shippingAddress,
-      deliveryChoice,
-    } = req.body;
+      const {
+        products,
+        paymentMethod,
+        name,
+        mobileNo,
+        shippingAddress,
+        deliveryChoice,
+      } = req.body;
 
-    if (!products?.length) {
-      return res.status(400).json({ error: "Products are required" });
-    }
+      if (!products?.length) {
+        return res.status(400).json({ error: "Products are required" });
+      }
 
-    if (req.isMiscellaneous && (!name || !mobileNo)) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "Name and mobile number are required for miscellaneous orders",
-        });
-    }
+      if (req.isMiscellaneous && (!name || !mobileNo)) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Name and mobile number are required for miscellaneous orders",
+          });
+      }
 
-    if (
-      !shippingAddress ||
-      !shippingAddress.address ||
-      !shippingAddress.city ||
-      !shippingAddress.state ||
-      !shippingAddress.pinCode
-    ) {
-      return res
-        .status(400)
-        .json({
-          error: "Complete shipping address with pin code is required",
-        });
-    }
+      if (
+        !shippingAddress ||
+        !shippingAddress.address ||
+        !shippingAddress.city ||
+        !shippingAddress.state ||
+        !shippingAddress.pinCode
+      ) {
+        return res
+          .status(400)
+          .json({
+            error: "Complete shipping address with pin code is required",
+          });
+      }
 
-    if (!/^\d{6}$/.test(shippingAddress.pinCode)) {
-      return res.status(400).json({ error: "Pin code must be 6 digits" });
-    }
+      if (!/^\d{6}$/.test(shippingAddress.pinCode)) {
+        return res.status(400).json({ error: "Pin code must be 6 digits" });
+      }
 
-    if (!["homeDelivery", "companyPickup"].includes(deliveryChoice)) {
-      return res.status(400).json({ error: "Invalid delivery choice" });
-    }
+      if (!["homeDelivery", "companyPickup"].includes(deliveryChoice)) {
+        return res.status(400).json({ error: "Invalid delivery choice" });
+      }
 
-    const validPaymentMethods = ["UPI", "netBanking", "COD"];
-    if (!validPaymentMethods.includes(paymentMethod)) {
-      return res.status(400).json({
-        error: "Invalid payment method",
-        validMethods: validPaymentMethods,
-      });
-    }
-
-    let totalAmount = 0;
-    let totalBoxes = 0; // Track total boxes across all products
-    const orderProducts = [];
-    const productTypes = new Set();
-
-    // First, calculate total boxes across all products
-    for (const item of products) {
-      if (!item.productId || !item.boxes || item.price === undefined) {
+      const validPaymentMethods = ["UPI", "netBanking", "COD"];
+      if (!validPaymentMethods.includes(paymentMethod)) {
         return res.status(400).json({
-          error: `Invalid product data: ${JSON.stringify(item)}`,
+          error: "Invalid payment method",
+          validMethods: validPaymentMethods,
         });
       }
 
-      const boxes = Number(item.boxes);
-      if (boxes < 1) {
+      let totalAmount = 0;
+      let totalBoxes = 0; // Track total boxes across all products
+      const orderProducts = [];
+      const productTypes = new Set();
+
+      // First, calculate total boxes across all products
+      for (const item of products) {
+        if (!item.productId || !item.boxes || item.price === undefined) {
+          return res.status(400).json({
+            error: `Invalid product data: ${JSON.stringify(item)}`,
+          });
+        }
+
+        const boxes = Number(item.boxes);
+        if (boxes < 1) {
+          return res.status(400).json({
+            error: `Minimum 1 box required for each product`,
+          });
+        }
+
+        totalBoxes += boxes;
+      }
+
+      // Check minimum 200 boxes requirement across all products ONLY for regular users
+      if (!req.isMiscellaneous && totalBoxes < 200) {
         return res.status(400).json({
-          error: `Minimum 1 box required for each product`,
+          error: "Minimum 200 boxes required across all products",
+          minimumRequired: 200,
+          currentTotal: totalBoxes,
         });
       }
 
-      totalBoxes += boxes;
-    }
-
-    // Check minimum 200 boxes requirement across all products ONLY for regular users
-    if (!req.isMiscellaneous && totalBoxes < 200) {
-      return res.status(400).json({
-        error: "Minimum 200 boxes required across all products",
-        minimumRequired: 200,
-        currentTotal: totalBoxes,
-      });
-    }
-
-    // Now process each product for order creation
-    for (const item of products) {
-      const product = await Product.findOne({
-        _id: item.productId,
-        isActive: true,
-      });
-
-      if (!product) {
-        return res.status(404).json({
-          error: `Product not found: ${item.productId}`,
+      // Now process each product for order creation
+      for (const item of products) {
+        const product = await Product.findOne({
+          _id: item.productId,
+          isActive: true,
         });
+
+        if (!product) {
+          return res.status(404).json({
+            error: `Product not found: ${item.productId}`,
+          });
+        }
+
+        const boxes = Number(item.boxes);
+        const price = Number(item.price);
+
+        if (isNaN(price) || price < 0) {
+          return res.status(400).json({
+            error: `Invalid price for ${product.name}`,
+          });
+        }
+
+        totalAmount += price * boxes;
+
+        orderProducts.push({
+          product: product._id,
+          boxes,
+          price,
+          originalPrice: price,
+        });
+
+        productTypes.add(product.type);
+
+        // Update product stock
+        product.boxes = (product.boxes || 0) - boxes;
+        product.stockRemarks.push({
+          message: `Deducted ${boxes} boxes for order`,
+          updatedBy: req.user._id,
+          boxes: -boxes,
+          changeType: "order",
+        });
+        await product.save();
       }
 
-      const boxes = Number(item.boxes);
-      const price = Number(item.price);
-      
-      if (isNaN(price) || price < 0) {
-        return res.status(400).json({
-          error: `Invalid price for ${product.name}`,
-        });
+      const deliveryCharge = calculateDeliveryCharge(
+        totalBoxes,
+        deliveryChoice,
+        shippingAddress.pinCode
+      );
+
+      const orderData = new Order({
+        user: req.customerUser._id,
+        products: orderProducts,
+        totalAmount,
+        deliveryCharge,
+        totalAmountWithDelivery: totalAmount + deliveryCharge,
+        paymentMethod,
+        paymentStatus: paymentMethod === "COD" ? "pending" : "pending",
+        orderStatus: isAhmedabadOrGandhinagar(shippingAddress.pinCode)
+          ? "pending"
+          : "preview",
+        createdByReception: req.user._id,
+        type: [...productTypes][0],
+        shippingAddress,
+        deliveryChoice,
+        firmName: req.customerUser.customerDetails.firmName,
+        gstNumber: req.customerUser.customerDetails.gstNumber,
+      });
+
+      if (req.customerUser.role === "miscellaneous") {
+        orderData.firmName = `${name} (Miscellaneous)`;
+        orderData.shippingAddress = shippingAddress;
+        orderData.isMiscellaneous = true;
+
+        req.customerUser.phoneNumber = mobileNo;
+        req.customerUser.name = name;
+        req.customerUser.customerDetails.firmName = `${name} (Miscellaneous)`;
+        await req.customerUser.save();
       }
 
-      totalAmount += price * boxes;
+      const order = new Order(orderData);
+      await order.save();
 
-      orderProducts.push({
-        product: product._id,
-        boxes,
-        price,
-        originalPrice: price,
+      const payment = new Payment({
+        user: req.customerUser._id,
+        amount: totalAmount + deliveryCharge,
+        status: paymentMethod === "COD" ? "pending" : "pending",
+        userActivityStatus: req.customerUser.isActive ? "active" : "inactive",
+        orderDetails: order._id,
       });
+      await payment.save();
 
-      productTypes.add(product.type);
-
-      // Update product stock
-      product.boxes = (product.boxes || 0) - boxes;
-      product.stockRemarks.push({
-        message: `Deducted ${boxes} boxes for order`,
-        updatedBy: req.user._id,
-        boxes: -boxes,
-        changeType: "order",
-      });
-      await product.save();
-    }
-
-    const deliveryCharge = calculateDeliveryCharge(
-      totalBoxes,
-      deliveryChoice,
-      shippingAddress.pinCode
-    );
-
-    const orderData = new Order({
-      user: req.customerUser._id,
-      products: orderProducts,
-      totalAmount,
-      deliveryCharge,
-      totalAmountWithDelivery: totalAmount + deliveryCharge,
-      paymentMethod,
-      paymentStatus: paymentMethod === "COD" ? "pending" : "pending",
-      orderStatus: isAhmedabadOrGandhinagar(shippingAddress.pinCode)
-        ? "pending"
-        : "preview",
-      createdByReception: req.user._id,
-      type: [...productTypes][0],
-      shippingAddress,
-      deliveryChoice,
-      firmName: req.customerUser.customerDetails.firmName,
-      gstNumber: req.customerUser.customerDetails.gstNumber,
-    });
-
-    if (req.customerUser.role === "miscellaneous") {
-      orderData.firmName = `${name} (Miscellaneous)`;
-      orderData.shippingAddress = shippingAddress;
-      orderData.isMiscellaneous = true;
-
-      req.customerUser.phoneNumber = mobileNo;
-      req.customerUser.name = name;
-      req.customerUser.customerDetails.firmName = `${name} (Miscellaneous)`;
-      await req.customerUser.save();
-    }
-
-    const order = new Order(orderData);
-    await order.save();
-
-    const payment = new Payment({
-      user: req.customerUser._id,
-      amount: totalAmount + deliveryCharge,
-      status: paymentMethod === "COD" ? "pending" : "pending",
-      userActivityStatus: req.customerUser.isActive ? "active" : "inactive",
-      orderDetails: order._id,
-    });
-    await payment.save();
-
-    res.status(201).json({
-      message: "Order created successfully",
-      order: {
-        ...order.toObject(),
-        createdBy: {
-          reception: req.user.name,
-          customer:
-            req.customerUser.role === "miscellaneous"
-              ? `${name} (Miscellaneous)`
-              : req.customerUser.customerDetails.firmName,
+      res.status(201).json({
+        message: "Order created successfully",
+        order: {
+          ...order.toObject(),
+          createdBy: {
+            reception: req.user.name,
+            customer:
+              req.customerUser.role === "miscellaneous"
+                ? `${name} (Miscellaneous)`
+                : req.customerUser.customerDetails.firmName,
+          },
         },
-      },
-      paymentId: payment._id,
-      amount: totalAmount + deliveryCharge,
-      totalBoxes: totalBoxes,
-      isMiscellaneous: req.isMiscellaneous || false, // Include this for clarity
-    });
-  } catch (error) {
-    console.error("Error creating order:", error);
-    res.status(500).json({
-      error: "Error creating order",
-      details: error.message,
-    });
-  }
-},
+        paymentId: payment._id,
+        amount: totalAmount + deliveryCharge,
+        totalBoxes: totalBoxes,
+        isMiscellaneous: req.isMiscellaneous || false, // Include this for clarity
+      });
+    } catch (error) {
+      console.error("Error creating order:", error);
+      res.status(500).json({
+        error: "Error creating order",
+        details: error.message,
+      });
+    }
+  },
 
   getOrderHistory: async (req, res) => {
     try {
@@ -561,15 +557,12 @@ const receptionController = {
           ...orderObj,
           orderSource: createdByReception.name
             ? user.role === "miscellaneous"
-              ? `Created by ${createdByReception.name} for ${
-                  user.name || "Unknown"
-                } (Miscellaneous)`
-              : `Created by ${createdByReception.name} for ${
-                  customerDetails.firmName || user.name || "Unknown"
-                }`
-            : `Direct order by ${
-                customerDetails.firmName || user.name || "Unknown"
-              }`,
+              ? `Created by ${createdByReception.name} for ${user.name || "Unknown"
+              } (Miscellaneous)`
+              : `Created by ${createdByReception.name} for ${customerDetails.firmName || user.name || "Unknown"
+              }`
+            : `Direct order by ${customerDetails.firmName || user.name || "Unknown"
+            }`,
         };
       });
 
@@ -1028,7 +1021,7 @@ const receptionController = {
         details: error.message,
       });
     }
-  },  
+  },
 
   // getMiscellaneousPanelAccess: async (req, res) => {
   //   try {
@@ -1108,90 +1101,90 @@ const receptionController = {
 
 
   getMiscellaneousPanelAccess: async (req, res) => {
-  try {
-    const { name, email, mobileNo } = req.body;
+    try {
+      const { name, email, mobileNo } = req.body;
 
-    if (!name || !mobileNo) {
-      return res
-        .status(400)
-        .json({ error: "Name and mobile number are required" });
-    }
+      if (!name || !mobileNo) {
+        return res
+          .status(400)
+          .json({ error: "Name and mobile number are required" });
+      }
 
-    if (!/^\d{10}$/.test(mobileNo)) {
-      return res
-        .status(400)
-        .json({ error: "Invalid mobile number. Must be 10 digits." });
-    }
+      if (!/^\d{10}$/.test(mobileNo)) {
+        return res
+          .status(400)
+          .json({ error: "Invalid mobile number. Must be 10 digits." });
+      }
 
-    // Generate a unique identifier for miscellaneous users without email
-    let uniqueIdentifier;
-    if (email) {
-      uniqueIdentifier = { email, role: "miscellaneous" };
-    } else {
-      // If no email, use mobile number as identifier
-      uniqueIdentifier = { phoneNumber: mobileNo, role: "miscellaneous" };
-    }
+      // Generate a unique identifier for miscellaneous users without email
+      let uniqueIdentifier;
+      if (email) {
+        uniqueIdentifier = { email, role: "miscellaneous" };
+      } else {
+        // If no email, use mobile number as identifier
+        uniqueIdentifier = { phoneNumber: mobileNo, role: "miscellaneous" };
+      }
 
-    let miscUser = await User.findOne(uniqueIdentifier);
+      let miscUser = await User.findOne(uniqueIdentifier);
 
-    if (!miscUser) {
-      const userCode = await generateUserCode();
+      if (!miscUser) {
+        const userCode = await generateUserCode();
 
-      miscUser = new User({
-        name,
-        email: email || `${mobileNo}@miscellaneous.com`, // Use dummy email if not provided
-        phoneNumber: mobileNo,
-        role: "miscellaneous",
-        password: Math.random().toString(36).slice(-8),
-        isActive: true,
-        customerDetails: {
+        miscUser = new User({
+          name,
+          email: email || `${mobileNo}@miscellaneous.com`, // Use dummy email if not provided
+          phoneNumber: mobileNo,
+          role: "miscellaneous",
+          password: Math.random().toString(36).slice(-8),
+          isActive: true,
+          customerDetails: {
+            firmName: `${name} (Miscellaneous)`,
+            userCode,
+            address: "Walk-in Customer",
+          },
+        });
+        await miscUser.save();
+      } else {
+        // Update existing user details
+        miscUser.name = name;
+        miscUser.phoneNumber = mobileNo;
+        if (email) {
+          miscUser.email = email; // Update email if provided
+        }
+        miscUser.customerDetails.firmName = `${name} (Miscellaneous)`;
+        await miscUser.save();
+      }
+
+      const token = jwt.sign(
+        {
+          userId: req.user._id,
+          customerId: miscUser._id,
+          isReceptionAccess: true,
+          isMiscellaneous: true,
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "4h" }
+      );
+
+      res.json({
+        success: true,
+        token,
+        customer: {
+          name,
+          email: miscUser.email,
+          mobileNo,
           firmName: `${name} (Miscellaneous)`,
-          userCode,
-          address: "Walk-in Customer",
+          userCode: miscUser.customerDetails?.userCode,
         },
       });
-      await miscUser.save();
-    } else {
-      // Update existing user details
-      miscUser.name = name;
-      miscUser.phoneNumber = mobileNo;
-      if (email) {
-        miscUser.email = email; // Update email if provided
-      }
-      miscUser.customerDetails.firmName = `${name} (Miscellaneous)`;
-      await miscUser.save();
+    } catch (error) {
+      console.error("Get miscellaneous panel access error:", error);
+      res.status(500).json({
+        error: "Error generating miscellaneous panel access",
+        details: error.message,
+      });
     }
-
-    const token = jwt.sign(
-      {
-        userId: req.user._id,
-        customerId: miscUser._id,
-        isReceptionAccess: true,
-        isMiscellaneous: true,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "4h" }
-    );
-
-    res.json({
-      success: true,
-      token,
-      customer: {
-        name,
-        email: miscUser.email,
-        mobileNo,
-        firmName: `${name} (Miscellaneous)`,
-        userCode: miscUser.customerDetails?.userCode,
-      },
-    });
-  } catch (error) {
-    console.error("Get miscellaneous panel access error:", error);
-    res.status(500).json({
-      error: "Error generating miscellaneous panel access",
-      details: error.message,
-    });
-  }
-},
+  },
 
   getSubmittedPayments: async (req, res) => {
     try {
@@ -1237,243 +1230,280 @@ const receptionController = {
 
 
 
-// getPendingPayments : async (req, res) => {
-//   try {
-//     const pendingPayments = await Payment.find({ status: "pending" })
-//       .populate(
-//         "user",
-//         "name phoneNumber email customerDetails.firmName customerDetails.userCode"
-//       )
-//       .populate({
-//         path: "orderDetails",
-//         populate: {
-//           path: "products.product",
-//           select: "name type",
-//         },
-//       })
-//       .sort({ createdAt: -1 });
+  // getPendingPayments : async (req, res) => {
+  //   try {
+  //     const pendingPayments = await Payment.find({ status: "pending" })
+  //       .populate(
+  //         "user",
+  //         "name phoneNumber email customerDetails.firmName customerDetails.userCode"
+  //       )
+  //       .populate({
+  //         path: "orderDetails",
+  //         populate: {
+  //           path: "products.product",
+  //           select: "name type",
+  //         },
+  //       })
+  //       .sort({ createdAt: -1 });
 
-//     const formattedPayments = pendingPayments.map((payment) => {
-//       if (!payment.orderDetails) {
-//         console.warn(`Payment ${payment._id} has no valid orderDetails`);
-//         return {
-//           paymentId: payment._id,
-//           orderId: "N/A",
-//           user: {
-//             name: payment.user?.name || "N/A",
-//             firmName: payment.user?.customerDetails?.firmName || "N/A",
-//             userCode: payment.user?.customerDetails?.userCode || "N/A",
-//             phoneNumber: payment.user?.phoneNumber || "N/A",
-//             email: payment.user?.email || "N/A",
-//           },
-//           products: [],
-//           totalAmount: Number(payment.amount) || 0,
-//           paidAmount: Number(payment.paidAmount) || 0,
-//           remainingAmount: Number(payment.remainingAmount) || 0,
-//           paymentHistory: payment.paymentHistory.map((entry) => ({
-//             ...entry.toObject(),
-//             submittedAmount: Number(entry.submittedAmount),
-//             verifiedAmount: Number(entry.verifiedAmount),
-//           })),
-//           deliveryCharge: 0,
-//           totalAmountWithDelivery: Number(payment.amount) || 0,
-//           paymentMethod: "N/A",
-//           paymentStatus: payment.status,
-//           orderStatus: "N/A",
-//           shippingAddress: {},
-//           firmName: payment.user?.customerDetails?.firmName || "N/A",
-//           gstNumber: "N/A",
-//           createdAt: payment.createdAt,
-//           updatedAt: payment.updatedAt,
-//         };
-//       }
+  //     const formattedPayments = pendingPayments.map((payment) => {
+  //       if (!payment.orderDetails) {
+  //         console.warn(`Payment ${payment._id} has no valid orderDetails`);
+  //         return {
+  //           paymentId: payment._id,
+  //           orderId: "N/A",
+  //           user: {
+  //             name: payment.user?.name || "N/A",
+  //             firmName: payment.user?.customerDetails?.firmName || "N/A",
+  //             userCode: payment.user?.customerDetails?.userCode || "N/A",
+  //             phoneNumber: payment.user?.phoneNumber || "N/A",
+  //             email: payment.user?.email || "N/A",
+  //           },
+  //           products: [],
+  //           totalAmount: Number(payment.amount) || 0,
+  //           paidAmount: Number(payment.paidAmount) || 0,
+  //           remainingAmount: Number(payment.remainingAmount) || 0,
+  //           paymentHistory: payment.paymentHistory.map((entry) => ({
+  //             ...entry.toObject(),
+  //             submittedAmount: Number(entry.submittedAmount),
+  //             verifiedAmount: Number(entry.verifiedAmount),
+  //           })),
+  //           deliveryCharge: 0,
+  //           totalAmountWithDelivery: Number(payment.amount) || 0,
+  //           paymentMethod: "N/A",
+  //           paymentStatus: payment.status,
+  //           orderStatus: "N/A",
+  //           shippingAddress: {},
+  //           firmName: payment.user?.customerDetails?.firmName || "N/A",
+  //           gstNumber: "N/A",
+  //           createdAt: payment.createdAt,
+  //           updatedAt: payment.updatedAt,
+  //         };
+  //       }
 
-//       return {
-//         paymentId: payment._id,
-//         orderId: payment.orderDetails._id,
-//         user: {
-//           name: payment.user?.name || "N/A",
-//           firmName: payment.user?.customerDetails?.firmName || "N/A",
-//           userCode: payment.user?.customerDetails?.userCode || "N/A",
-//           phoneNumber: payment.user?.phoneNumber || "N/A",
-//           email: payment.user?.email || "N/A",
-//         },
-//         products: payment.orderDetails.products.map((p) => ({
-//           productName: p.product?.name || "N/A",
-//           productType: p.product?.type || "N/A",
-//           boxes: Number(p.boxes) || 0,
-//           price: Number(p.price) || 0,
-//         })),
-//         totalAmount: Number(payment.amount) || 0,
-//         paidAmount: Number(payment.paidAmount) || 0,
-//         remainingAmount: Number(payment.remainingAmount) || 0,
-//         paymentHistory: payment.paymentHistory.map((entry) => ({
-//           ...entry.toObject(),
-//           submittedAmount: Number(entry.submittedAmount),
-//           verifiedAmount: Number(entry.verifiedAmount),
-//         })),
-//         deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
-//         totalAmountWithDelivery:
-//           Number(payment.orderDetails.totalAmountWithDelivery) || 0,
-//         paymentMethod: payment.orderDetails.paymentMethod,
-//         paymentStatus: payment.orderDetails.paymentStatus,
-//         orderStatus: payment.orderDetails.orderStatus,
-//         shippingAddress: payment.orderDetails.shippingAddress,
-//         firmName: payment.orderDetails.firmName,
-//         gstNumber: payment.orderDetails.gstNumber || "N/A",
-//         createdAt: payment.createdAt,
-//         updatedAt: payment.updatedAt,
-//       };
-//     });
+  //       return {
+  //         paymentId: payment._id,
+  //         orderId: payment.orderDetails._id,
+  //         user: {
+  //           name: payment.user?.name || "N/A",
+  //           firmName: payment.user?.customerDetails?.firmName || "N/A",
+  //           userCode: payment.user?.customerDetails?.userCode || "N/A",
+  //           phoneNumber: payment.user?.phoneNumber || "N/A",
+  //           email: payment.user?.email || "N/A",
+  //         },
+  //         products: payment.orderDetails.products.map((p) => ({
+  //           productName: p.product?.name || "N/A",
+  //           productType: p.product?.type || "N/A",
+  //           boxes: Number(p.boxes) || 0,
+  //           price: Number(p.price) || 0,
+  //         })),
+  //         totalAmount: Number(payment.amount) || 0,
+  //         paidAmount: Number(payment.paidAmount) || 0,
+  //         remainingAmount: Number(payment.remainingAmount) || 0,
+  //         paymentHistory: payment.paymentHistory.map((entry) => ({
+  //           ...entry.toObject(),
+  //           submittedAmount: Number(entry.submittedAmount),
+  //           verifiedAmount: Number(entry.verifiedAmount),
+  //         })),
+  //         deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
+  //         totalAmountWithDelivery:
+  //           Number(payment.orderDetails.totalAmountWithDelivery) || 0,
+  //         paymentMethod: payment.orderDetails.paymentMethod,
+  //         paymentStatus: payment.orderDetails.paymentStatus,
+  //         orderStatus: payment.orderDetails.orderStatus,
+  //         shippingAddress: payment.orderDetails.shippingAddress,
+  //         firmName: payment.orderDetails.firmName,
+  //         gstNumber: payment.orderDetails.gstNumber || "N/A",
+  //         createdAt: payment.createdAt,
+  //         updatedAt: payment.updatedAt,
+  //       };
+  //     });
 
-//     res.json({
-//       count: formattedPayments.length,
-//       pendingPayments: formattedPayments,
-//     });
-//   } catch (error) {
-//     console.error("Error fetching pending payments:", error);
-//     res.status(500).json({
-//       error: "Error fetching pending payments",
-//       details: error.message,
-//     });
-//   }
-// },
-
-
-
-// getPendingPayments: async (req, res) => {
-//   try {
-//     const pendingPayments = await Payment.find({ status: "pending" })
-//       .populate(
-//         "user",
-//         "name phoneNumber email customerDetails.firmName customerDetails.userCode"
-//       )
-//       .populate({
-//         path: "orderDetails",
-//         populate: {
-//           path: "products.product",
-//           select: "name type",
-//         },
-//       })
-//       .sort({ createdAt: -1 });
-
-//     const formattedPayments = pendingPayments.map((payment) => {
-//       if (!payment.orderDetails) {
-//         console.warn(`Payment ${payment._id} has no valid orderDetails`);
-//         return {
-//           paymentId: payment._id,
-//           orderId: "N/A",
-//           user: {
-//             name: payment.user?.name || "N/A",
-//             firmName: payment.user?.customerDetails?.firmName || "N/A",
-//             userCode: payment.user?.customerDetails?.userCode || "N/A",
-//             phoneNumber: payment.user?.phoneNumber || "N/A",
-//             email: payment.user?.email || "N/A",
-//           },
-//           products: [],
-//           totalAmount: Number(payment.amount) || 0,
-//           paidAmount: Number(payment.paidAmount) || 0,
-//           remainingAmount: Number(payment.amount) - Number(payment.paidAmount) || 0,
-//           paymentHistory: payment.paymentHistory.map((entry) => ({
-//             ...entry.toObject(),
-//             submittedAmount: Number(entry.submittedAmount),
-//             verifiedAmount: Number(entry.verifiedAmount),
-//           })),
-//           deliveryCharge: 0,
-//           totalAmountWithDelivery: Number(payment.amount) || 0,
-//           paymentMethod: "N/A",
-//           paymentStatus: payment.status,
-//           orderStatus: "N/A",
-//           shippingAddress: {},
-//           firmName: payment.user?.customerDetails?.firmName || "N/A",
-//           gstNumber: "N/A",
-//           createdAt: payment.createdAt,
-//           updatedAt: payment.updatedAt,
-//         };
-//       }
-
-//       // Calculate remaining amount based on order's totalAmountWithDelivery
-//       const totalAmountWithDelivery = Number(payment.orderDetails.totalAmountWithDelivery) || 0;
-//       const paidAmount = Number(payment.paidAmount) || 0;
-//       const remainingAmount = totalAmountWithDelivery - paidAmount;
-
-//       return {
-//         paymentId: payment._id,
-//         orderId: payment.orderDetails._id,
-//         user: {
-//           name: payment.user?.name || "N/A",
-//           firmName: payment.user?.customerDetails?.firmName || "N/A",
-//           userCode: payment.user?.customerDetails?.userCode || "N/A",
-//           phoneNumber: payment.user?.phoneNumber || "N/A",
-//           email: payment.user?.email || "N/A",
-//         },
-//         products: payment.orderDetails.products.map((p) => ({
-//           productName: p.product?.name || "N/A",
-//           productType: p.product?.type || "N/A",
-//           boxes: Number(p.boxes) || 0,
-//           price: Number(p.price) || 0,
-//         })),
-//         totalAmount: Number(payment.orderDetails.totalAmount) || 0,
-//         paidAmount: paidAmount,
-//         remainingAmount: remainingAmount, // Now includes delivery charges
-//         paymentHistory: payment.paymentHistory.map((entry) => ({
-//           ...entry.toObject(),
-//           submittedAmount: Number(entry.submittedAmount),
-//           verifiedAmount: Number(entry.verifiedAmount),
-//         })),
-//         deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
-//         totalAmountWithDelivery: totalAmountWithDelivery,
-//         paymentMethod: payment.orderDetails.paymentMethod,
-//         paymentStatus: payment.orderDetails.paymentStatus,
-//         orderStatus: payment.orderDetails.orderStatus,
-//         shippingAddress: payment.orderDetails.shippingAddress,
-//         firmName: payment.orderDetails.firmName,
-//         gstNumber: payment.orderDetails.gstNumber || "N/A",
-//         createdAt: payment.createdAt,
-//         updatedAt: payment.updatedAt,
-//       };
-//     });
-
-//     res.json({
-//       count: formattedPayments.length,
-//       pendingPayments: formattedPayments,
-//     });
-//   } catch (error) {
-//     console.error("Error fetching pending payments:", error);
-//     res.status(500).json({
-//       error: "Error fetching pending payments",
-//       details: error.message,
-//     });
-//   }
-// },
+  //     res.json({
+  //       count: formattedPayments.length,
+  //       pendingPayments: formattedPayments,
+  //     });
+  //   } catch (error) {
+  //     console.error("Error fetching pending payments:", error);
+  //     res.status(500).json({
+  //       error: "Error fetching pending payments",
+  //       details: error.message,
+  //     });
+  //   }
+  // },
 
 
-getPendingPayments: async (req, res) => {
-  try {
-    const pendingPayments = await Payment.find({ 
-      status: { $in: ["pending", "partial"] } // Include both pending and partial
-    })
-      .populate(
-        "user",
-        "name phoneNumber email customerDetails.firmName customerDetails.userCode"
-      )
-      .populate({
-        path: "orderDetails",
-        populate: {
-          path: "products.product",
-          select: "name type",
-        },
+
+  // getPendingPayments: async (req, res) => {
+  //   try {
+  //     const pendingPayments = await Payment.find({ status: "pending" })
+  //       .populate(
+  //         "user",
+  //         "name phoneNumber email customerDetails.firmName customerDetails.userCode"
+  //       )
+  //       .populate({
+  //         path: "orderDetails",
+  //         populate: {
+  //           path: "products.product",
+  //           select: "name type",
+  //         },
+  //       })
+  //       .sort({ createdAt: -1 });
+
+  //     const formattedPayments = pendingPayments.map((payment) => {
+  //       if (!payment.orderDetails) {
+  //         console.warn(`Payment ${payment._id} has no valid orderDetails`);
+  //         return {
+  //           paymentId: payment._id,
+  //           orderId: "N/A",
+  //           user: {
+  //             name: payment.user?.name || "N/A",
+  //             firmName: payment.user?.customerDetails?.firmName || "N/A",
+  //             userCode: payment.user?.customerDetails?.userCode || "N/A",
+  //             phoneNumber: payment.user?.phoneNumber || "N/A",
+  //             email: payment.user?.email || "N/A",
+  //           },
+  //           products: [],
+  //           totalAmount: Number(payment.amount) || 0,
+  //           paidAmount: Number(payment.paidAmount) || 0,
+  //           remainingAmount: Number(payment.amount) - Number(payment.paidAmount) || 0,
+  //           paymentHistory: payment.paymentHistory.map((entry) => ({
+  //             ...entry.toObject(),
+  //             submittedAmount: Number(entry.submittedAmount),
+  //             verifiedAmount: Number(entry.verifiedAmount),
+  //           })),
+  //           deliveryCharge: 0,
+  //           totalAmountWithDelivery: Number(payment.amount) || 0,
+  //           paymentMethod: "N/A",
+  //           paymentStatus: payment.status,
+  //           orderStatus: "N/A",
+  //           shippingAddress: {},
+  //           firmName: payment.user?.customerDetails?.firmName || "N/A",
+  //           gstNumber: "N/A",
+  //           createdAt: payment.createdAt,
+  //           updatedAt: payment.updatedAt,
+  //         };
+  //       }
+
+  //       // Calculate remaining amount based on order's totalAmountWithDelivery
+  //       const totalAmountWithDelivery = Number(payment.orderDetails.totalAmountWithDelivery) || 0;
+  //       const paidAmount = Number(payment.paidAmount) || 0;
+  //       const remainingAmount = totalAmountWithDelivery - paidAmount;
+
+  //       return {
+  //         paymentId: payment._id,
+  //         orderId: payment.orderDetails._id,
+  //         user: {
+  //           name: payment.user?.name || "N/A",
+  //           firmName: payment.user?.customerDetails?.firmName || "N/A",
+  //           userCode: payment.user?.customerDetails?.userCode || "N/A",
+  //           phoneNumber: payment.user?.phoneNumber || "N/A",
+  //           email: payment.user?.email || "N/A",
+  //         },
+  //         products: payment.orderDetails.products.map((p) => ({
+  //           productName: p.product?.name || "N/A",
+  //           productType: p.product?.type || "N/A",
+  //           boxes: Number(p.boxes) || 0,
+  //           price: Number(p.price) || 0,
+  //         })),
+  //         totalAmount: Number(payment.orderDetails.totalAmount) || 0,
+  //         paidAmount: paidAmount,
+  //         remainingAmount: remainingAmount, // Now includes delivery charges
+  //         paymentHistory: payment.paymentHistory.map((entry) => ({
+  //           ...entry.toObject(),
+  //           submittedAmount: Number(entry.submittedAmount),
+  //           verifiedAmount: Number(entry.verifiedAmount),
+  //         })),
+  //         deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
+  //         totalAmountWithDelivery: totalAmountWithDelivery,
+  //         paymentMethod: payment.orderDetails.paymentMethod,
+  //         paymentStatus: payment.orderDetails.paymentStatus,
+  //         orderStatus: payment.orderDetails.orderStatus,
+  //         shippingAddress: payment.orderDetails.shippingAddress,
+  //         firmName: payment.orderDetails.firmName,
+  //         gstNumber: payment.orderDetails.gstNumber || "N/A",
+  //         createdAt: payment.createdAt,
+  //         updatedAt: payment.updatedAt,
+  //       };
+  //     });
+
+  //     res.json({
+  //       count: formattedPayments.length,
+  //       pendingPayments: formattedPayments,
+  //     });
+  //   } catch (error) {
+  //     console.error("Error fetching pending payments:", error);
+  //     res.status(500).json({
+  //       error: "Error fetching pending payments",
+  //       details: error.message,
+  //     });
+  //   }
+  // },
+
+
+  getPendingPayments: async (req, res) => {
+    try {
+      const pendingPayments = await Payment.find({
+        status: { $in: ["pending", "partial"] } // Include both pending and partial
       })
-      .sort({ createdAt: -1 });
+        .populate(
+          "user",
+          "name phoneNumber email customerDetails.firmName customerDetails.userCode"
+        )
+        .populate({
+          path: "orderDetails",
+          populate: {
+            path: "products.product",
+            select: "name type",
+          },
+        })
+        .sort({ createdAt: -1 });
 
-    const formattedPayments = pendingPayments.map((payment) => {
-      if (!payment.orderDetails) {
-        console.warn(`Payment ${payment._id} has no valid orderDetails`);
-        const totalAmount = Number(payment.amount) || 0;
+      const formattedPayments = pendingPayments.map((payment) => {
+        if (!payment.orderDetails) {
+          console.warn(`Payment ${payment._id} has no valid orderDetails`);
+          const totalAmount = Number(payment.amount) || 0;
+          const paidAmount = Number(payment.paidAmount) || 0;
+          return {
+            paymentId: payment._id,
+            orderId: "N/A",
+            user: {
+              name: payment.user?.name || "N/A",
+              firmName: payment.user?.customerDetails?.firmName || "N/A",
+              userCode: payment.user?.customerDetails?.userCode || "N/A",
+              phoneNumber: payment.user?.phoneNumber || "N/A",
+              email: payment.user?.email || "N/A",
+            },
+            products: [],
+            totalAmount: totalAmount,
+            paidAmount: paidAmount,
+            remainingAmount: totalAmount - paidAmount,
+            paymentHistory: payment.paymentHistory.map((entry) => ({
+              ...entry.toObject(),
+              submittedAmount: Number(entry.submittedAmount),
+              verifiedAmount: Number(entry.verifiedAmount),
+            })),
+            deliveryCharge: 0,
+            totalAmountWithDelivery: totalAmount,
+            paymentMethod: "N/A",
+            paymentStatus: payment.status,
+            orderStatus: "N/A",
+            shippingAddress: {},
+            firmName: payment.user?.customerDetails?.firmName || "N/A",
+            gstNumber: "N/A",
+            createdAt: payment.createdAt,
+            updatedAt: payment.updatedAt,
+          };
+        }
+
+        // Calculate remaining amount based on order's totalAmountWithDelivery
+        const totalAmountWithDelivery = Number(payment.orderDetails.totalAmountWithDelivery) || 0;
         const paidAmount = Number(payment.paidAmount) || 0;
+        const remainingAmount = totalAmountWithDelivery - paidAmount;
+
         return {
           paymentId: payment._id,
-          orderId: "N/A",
+          orderId: payment.orderDetails._id,
           user: {
             name: payment.user?.name || "N/A",
             firmName: payment.user?.customerDetails?.firmName || "N/A",
@@ -1481,605 +1511,291 @@ getPendingPayments: async (req, res) => {
             phoneNumber: payment.user?.phoneNumber || "N/A",
             email: payment.user?.email || "N/A",
           },
-          products: [],
-          totalAmount: totalAmount,
+          products: payment.orderDetails.products.map((p) => ({
+            productName: p.product?.name || "N/A",
+            productType: p.product?.type || "N/A",
+            boxes: Number(p.boxes) || 0,
+            price: Number(p.price) || 0,
+          })),
+          totalAmount: Number(payment.orderDetails.totalAmount) || 0,
           paidAmount: paidAmount,
-          remainingAmount: totalAmount - paidAmount,
+          remainingAmount: remainingAmount,
           paymentHistory: payment.paymentHistory.map((entry) => ({
             ...entry.toObject(),
             submittedAmount: Number(entry.submittedAmount),
             verifiedAmount: Number(entry.verifiedAmount),
           })),
-          deliveryCharge: 0,
-          totalAmountWithDelivery: totalAmount,
-          paymentMethod: "N/A",
+          deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
+          totalAmountWithDelivery: totalAmountWithDelivery,
+          paymentMethod: payment.orderDetails.paymentMethod,
           paymentStatus: payment.status,
-          orderStatus: "N/A",
-          shippingAddress: {},
-          firmName: payment.user?.customerDetails?.firmName || "N/A",
-          gstNumber: "N/A",
+          orderStatus: payment.orderDetails.orderStatus,
+          shippingAddress: payment.orderDetails.shippingAddress,
+          firmName: payment.orderDetails.firmName,
+          gstNumber: payment.orderDetails.gstNumber || "N/A",
           createdAt: payment.createdAt,
           updatedAt: payment.updatedAt,
         };
-      }
+      });
 
-      // Calculate remaining amount based on order's totalAmountWithDelivery
-      const totalAmountWithDelivery = Number(payment.orderDetails.totalAmountWithDelivery) || 0;
-      const paidAmount = Number(payment.paidAmount) || 0;
-      const remainingAmount = totalAmountWithDelivery - paidAmount;
-
-      return {
-        paymentId: payment._id,
-        orderId: payment.orderDetails._id,
-        user: {
-          name: payment.user?.name || "N/A",
-          firmName: payment.user?.customerDetails?.firmName || "N/A",
-          userCode: payment.user?.customerDetails?.userCode || "N/A",
-          phoneNumber: payment.user?.phoneNumber || "N/A",
-          email: payment.user?.email || "N/A",
-        },
-        products: payment.orderDetails.products.map((p) => ({
-          productName: p.product?.name || "N/A",
-          productType: p.product?.type || "N/A",
-          boxes: Number(p.boxes) || 0,
-          price: Number(p.price) || 0,
-        })),
-        totalAmount: Number(payment.orderDetails.totalAmount) || 0,
-        paidAmount: paidAmount,
-        remainingAmount: remainingAmount,
-        paymentHistory: payment.paymentHistory.map((entry) => ({
-          ...entry.toObject(),
-          submittedAmount: Number(entry.submittedAmount),
-          verifiedAmount: Number(entry.verifiedAmount),
-        })),
-        deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
-        totalAmountWithDelivery: totalAmountWithDelivery,
-        paymentMethod: payment.orderDetails.paymentMethod,
-        paymentStatus: payment.status,
-        orderStatus: payment.orderDetails.orderStatus,
-        shippingAddress: payment.orderDetails.shippingAddress,
-        firmName: payment.orderDetails.firmName,
-        gstNumber: payment.orderDetails.gstNumber || "N/A",
-        createdAt: payment.createdAt,
-        updatedAt: payment.updatedAt,
-      };
-    });
-
-    res.json({
-      count: formattedPayments.length,
-      pendingPayments: formattedPayments,
-    });
-  } catch (error) {
-    console.error("Error fetching pending payments:", error);
-    res.status(500).json({
-      error: "Error fetching pending payments",
-      details: error.message,
-    });
-  }
-},
-
-// updatePaymentStatus : async (req, res) => {
-//   try {
-//     const { paymentId } = req.params;
-//     const { paymentStatus, receivedAmount, remarks } = req.body;
-
-//     if (!paymentStatus || receivedAmount === undefined) {
-//       return res.status(400).json({
-//         error: "Payment status and received amount are required",
-//       });
-//     }
-
-//     const numericReceivedAmount = Number(receivedAmount);
-//     if (isNaN(numericReceivedAmount) || numericReceivedAmount < 0) {
-//       return res.status(400).json({
-//         error: "Received amount must be a valid positive number",
-//       });
-//     }
-
-//     const payment = await Payment.findById(paymentId)
-//       .populate("user")
-//       .populate("orderDetails");
-
-//     if (!payment) {
-//       return res.status(404).json({ error: "Payment not found" });
-//     }
-
-//     // Validate payment status transition
-//     const validStatuses = ["pending", "completed", "failed"];
-//     if (!validStatuses.includes(paymentStatus)) {
-//       return res.status(400).json({
-//         error: "Invalid payment status",
-//         validStatuses: validStatuses,
-//       });
-//     }
-
-//     // Update payment details
-//     payment.paidAmount = (payment.paidAmount || 0) + numericReceivedAmount;
-//     payment.status = paymentStatus;
-    
-//     // Add to payment history
-//     payment.paymentHistory.push({
-//       referenceId: `REC-${Date.now()}`,
-//       screenshotUrl: "manual-entry", // Since it's manual entry by reception
-//       submittedAmount: numericReceivedAmount,
-//       status: "verified", // Auto-verified by reception
-//       verifiedAmount: numericReceivedAmount,
-//       verifiedBy: req.user._id,
-//       verificationNotes: remarks || `Payment updated by reception - ${paymentStatus}`,
-//       submissionDate: new Date(),
-//       verificationDate: new Date(),
-//     });
-
-//     // Update corresponding order payment status
-//     if (payment.orderDetails) {
-//       const order = await Order.findById(payment.orderDetails._id);
-//       if (order) {
-//         order.paymentStatus = paymentStatus;
-//         order.paymentStatusHistory.push({
-//           status: paymentStatus,
-//           updatedBy: req.user._id,
-//           notes: remarks || `Payment updated: Received ${numericReceivedAmount} by reception`,
-//           updatedAt: new Date(),
-//         });
-//         await order.save();
-//       }
-//     }
-
-//     await payment.save();
-
-//     res.json({
-//       message: "Payment status updated successfully",
-//       payment: {
-//         paymentId: payment._id,
-//         totalAmount: payment.amount,
-//         paidAmount: payment.paidAmount,
-//         remainingAmount: payment.remainingAmount,
-//         status: payment.status,
-//         receivedAmount: numericReceivedAmount,
-//         remarks: remarks,
-//         updatedBy: req.user.name,
-//         updatedAt: new Date(),
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Error updating payment status:", error);
-//     res.status(500).json({
-//       error: "Error updating payment status",
-//       details: error.message,
-//     });
-//   }
-// },
-
-
-updatePaymentStatus: async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    const { paymentStatus, receivedAmount, remarks } = req.body;
-
-    if (!paymentStatus || receivedAmount === undefined) {
-      return res.status(400).json({
-        error: "Payment status and received amount are required",
+      res.json({
+        count: formattedPayments.length,
+        pendingPayments: formattedPayments,
+      });
+    } catch (error) {
+      console.error("Error fetching pending payments:", error);
+      res.status(500).json({
+        error: "Error fetching pending payments",
+        details: error.message,
       });
     }
+  },
 
-    const numericReceivedAmount = Number(receivedAmount);
-    if (isNaN(numericReceivedAmount) || numericReceivedAmount < 0) {
-      return res.status(400).json({
-        error: "Received amount must be a valid positive number",
-      });
-    }
+  // updatePaymentStatus : async (req, res) => {
+  //   try {
+  //     const { paymentId } = req.params;
+  //     const { paymentStatus, receivedAmount, remarks } = req.body;
 
-    const payment = await Payment.findById(paymentId)
-      .populate("user")
-      .populate("orderDetails");
+  //     if (!paymentStatus || receivedAmount === undefined) {
+  //       return res.status(400).json({
+  //         error: "Payment status and received amount are required",
+  //       });
+  //     }
 
-    if (!payment) {
-      return res.status(404).json({ error: "Payment not found" });
-    }
+  //     const numericReceivedAmount = Number(receivedAmount);
+  //     if (isNaN(numericReceivedAmount) || numericReceivedAmount < 0) {
+  //       return res.status(400).json({
+  //         error: "Received amount must be a valid positive number",
+  //       });
+  //     }
 
-    // Validate payment status transition
-    const validStatuses = ["pending", "partial", "completed", "failed"];
-    if (!validStatuses.includes(paymentStatus)) {
-      return res.status(400).json({
-        error: "Invalid payment status",
-        validStatuses: validStatuses,
-      });
-    }
+  //     const payment = await Payment.findById(paymentId)
+  //       .populate("user")
+  //       .populate("orderDetails");
 
-    // Get the actual total amount (including delivery charges)
-    const totalAmountDue = payment.orderDetails 
-      ? Number(payment.orderDetails.totalAmountWithDelivery)
-      : Number(payment.amount);
+  //     if (!payment) {
+  //       return res.status(404).json({ error: "Payment not found" });
+  //     }
 
-    // Calculate new paid amount
-    const newPaidAmount = (payment.paidAmount || 0) + numericReceivedAmount;
+  //     // Validate payment status transition
+  //     const validStatuses = ["pending", "completed", "failed"];
+  //     if (!validStatuses.includes(paymentStatus)) {
+  //       return res.status(400).json({
+  //         error: "Invalid payment status",
+  //         validStatuses: validStatuses,
+  //       });
+  //     }
 
-    // **CRITICAL FIX: Prevent overpayment**
-    if (newPaidAmount > totalAmountDue) {
-      return res.status(400).json({
-        error: "Payment amount exceeds total due",
-        details: {
-          totalDue: totalAmountDue,
-          alreadyPaid: payment.paidAmount || 0,
-          attemptingToPay: numericReceivedAmount,
-          wouldResultIn: newPaidAmount,
-          maxAllowed: totalAmountDue - (payment.paidAmount || 0)
-        }
-      });
-    }
+  //     // Update payment details
+  //     payment.paidAmount = (payment.paidAmount || 0) + numericReceivedAmount;
+  //     payment.status = paymentStatus;
 
-    // Update payment details
-    payment.paidAmount = newPaidAmount;
-    
-    // Auto-determine status based on amount paid
-    if (newPaidAmount >= totalAmountDue) {
-      payment.status = "completed";
-    } else if (newPaidAmount > 0 && newPaidAmount < totalAmountDue) {
-      // If user selected partial or if amount is partial, set to partial
-      payment.status = paymentStatus === "partial" ? "partial" : paymentStatus;
-    } else {
-      payment.status = paymentStatus;
-    }
-    
-    // Add to payment history
-    payment.paymentHistory.push({
-      referenceId: `REC-${Date.now()}`,
-      screenshotUrl: "manual-entry",
-      submittedAmount: numericReceivedAmount,
-      status: "verified",
-      verifiedAmount: numericReceivedAmount,
-      verifiedBy: req.user._id,
-      verificationNotes: remarks || `Payment updated by reception - ${payment.status}`,
-      submissionDate: new Date(),
-      verificationDate: new Date(),
-    });
+  //     // Add to payment history
+  //     payment.paymentHistory.push({
+  //       referenceId: `REC-${Date.now()}`,
+  //       screenshotUrl: "manual-entry", // Since it's manual entry by reception
+  //       submittedAmount: numericReceivedAmount,
+  //       status: "verified", // Auto-verified by reception
+  //       verifiedAmount: numericReceivedAmount,
+  //       verifiedBy: req.user._id,
+  //       verificationNotes: remarks || `Payment updated by reception - ${paymentStatus}`,
+  //       submissionDate: new Date(),
+  //       verificationDate: new Date(),
+  //     });
 
-    // Update corresponding order payment status
-    if (payment.orderDetails) {
-      const order = await Order.findById(payment.orderDetails._id);
-      if (order) {
-        order.paymentStatus = payment.status;
-        order.paymentStatusHistory = order.paymentStatusHistory || [];
-        order.paymentStatusHistory.push({
-          status: payment.status,
-          updatedBy: req.user._id,
-          notes: remarks || `Payment updated: Received ₹${numericReceivedAmount} by reception`,
-          updatedAt: new Date(),
+  //     // Update corresponding order payment status
+  //     if (payment.orderDetails) {
+  //       const order = await Order.findById(payment.orderDetails._id);
+  //       if (order) {
+  //         order.paymentStatus = paymentStatus;
+  //         order.paymentStatusHistory.push({
+  //           status: paymentStatus,
+  //           updatedBy: req.user._id,
+  //           notes: remarks || `Payment updated: Received ${numericReceivedAmount} by reception`,
+  //           updatedAt: new Date(),
+  //         });
+  //         await order.save();
+  //       }
+  //     }
+
+  //     await payment.save();
+
+  //     res.json({
+  //       message: "Payment status updated successfully",
+  //       payment: {
+  //         paymentId: payment._id,
+  //         totalAmount: payment.amount,
+  //         paidAmount: payment.paidAmount,
+  //         remainingAmount: payment.remainingAmount,
+  //         status: payment.status,
+  //         receivedAmount: numericReceivedAmount,
+  //         remarks: remarks,
+  //         updatedBy: req.user.name,
+  //         updatedAt: new Date(),
+  //       },
+  //     });
+  //   } catch (error) {
+  //     console.error("Error updating payment status:", error);
+  //     res.status(500).json({
+  //       error: "Error updating payment status",
+  //       details: error.message,
+  //     });
+  //   }
+  // },
+
+
+  updatePaymentStatus: async (req, res) => {
+    try {
+      const { paymentId } = req.params;
+      const { paymentStatus, receivedAmount, remarks } = req.body;
+
+      if (!paymentStatus || receivedAmount === undefined) {
+        return res.status(400).json({
+          error: "Payment status and received amount are required",
         });
-        await order.save();
       }
-    }
 
-    await payment.save();
+      const numericReceivedAmount = Number(receivedAmount);
+      if (isNaN(numericReceivedAmount) || numericReceivedAmount < 0) {
+        return res.status(400).json({
+          error: "Received amount must be a valid positive number",
+        });
+      }
 
-    res.json({
-      message: "Payment status updated successfully",
-      payment: {
-        paymentId: payment._id,
-        totalAmount: totalAmountDue,
-        paidAmount: payment.paidAmount,
-        remainingAmount: totalAmountDue - payment.paidAmount,
-        status: payment.status,
-        receivedAmount: numericReceivedAmount,
-        remarks: remarks,
-        updatedBy: req.user.name,
-        updatedAt: new Date(),
-      },
-    });
-  } catch (error) {
-    console.error("Error updating payment status:", error);
-    res.status(500).json({
-      error: "Error updating payment status",
-      details: error.message,
-    });
-  }
-},
+      const payment = await Payment.findById(paymentId)
+        .populate("user")
+        .populate("orderDetails");
 
+      if (!payment) {
+        return res.status(404).json({ error: "Payment not found" });
+      }
 
+      // Validate payment status transition
+      const validStatuses = ["pending", "partial", "completed", "failed"];
+      if (!validStatuses.includes(paymentStatus)) {
+        return res.status(400).json({
+          error: "Invalid payment status",
+          validStatuses: validStatuses,
+        });
+      }
 
-getPartialPayments: async (req, res) => {
-  try {
-    const partialPayments = await Payment.find({ status: "partial" })
-      .populate(
-        "user",
-        "name phoneNumber email customerDetails.firmName customerDetails.userCode"
-      )
-      .populate({
-        path: "orderDetails",
-        populate: {
-          path: "products.product",
-          select: "name type",
-        },
-      })
-      .sort({ createdAt: -1 });
-
-    const formattedPayments = partialPayments.map((payment) => {
-      const totalAmountWithDelivery = payment.orderDetails 
+      // Get the actual total amount (including delivery charges)
+      const totalAmountDue = payment.orderDetails
         ? Number(payment.orderDetails.totalAmountWithDelivery)
         : Number(payment.amount);
-      const paidAmount = Number(payment.paidAmount) || 0;
-      const remainingAmount = totalAmountWithDelivery - paidAmount;
 
-      return {
-        paymentId: payment._id,
-        orderId: payment.orderDetails?._id || "N/A",
-        user: {
-          name: payment.user?.name || "N/A",
-          firmName: payment.user?.customerDetails?.firmName || "N/A",
-          userCode: payment.user?.customerDetails?.userCode || "N/A",
-          phoneNumber: payment.user?.phoneNumber || "N/A",
-          email: payment.user?.email || "N/A",
+      // Calculate new paid amount
+      const newPaidAmount = (payment.paidAmount || 0) + numericReceivedAmount;
+
+      // **CRITICAL FIX: Prevent overpayment**
+      if (newPaidAmount > totalAmountDue) {
+        return res.status(400).json({
+          error: "Payment amount exceeds total due",
+          details: {
+            totalDue: totalAmountDue,
+            alreadyPaid: payment.paidAmount || 0,
+            attemptingToPay: numericReceivedAmount,
+            wouldResultIn: newPaidAmount,
+            maxAllowed: totalAmountDue - (payment.paidAmount || 0)
+          }
+        });
+      }
+
+      // Update payment details
+      payment.paidAmount = newPaidAmount;
+
+      // Auto-determine status based on amount paid
+      if (newPaidAmount >= totalAmountDue) {
+        payment.status = "completed";
+      } else if (newPaidAmount > 0 && newPaidAmount < totalAmountDue) {
+        // If user selected partial or if amount is partial, set to partial
+        payment.status = paymentStatus === "partial" ? "partial" : paymentStatus;
+      } else {
+        payment.status = paymentStatus;
+      }
+
+      // Add to payment history
+      payment.paymentHistory.push({
+        referenceId: `REC-${Date.now()}`,
+        screenshotUrl: "manual-entry",
+        submittedAmount: numericReceivedAmount,
+        status: "verified",
+        verifiedAmount: numericReceivedAmount,
+        verifiedBy: req.user._id,
+        verificationNotes: remarks || `Payment updated by reception - ${payment.status}`,
+        submissionDate: new Date(),
+        verificationDate: new Date(),
+      });
+
+      // Update corresponding order payment status
+      if (payment.orderDetails) {
+        const order = await Order.findById(payment.orderDetails._id);
+        if (order) {
+          order.paymentStatus = payment.status;
+          order.paymentStatusHistory = order.paymentStatusHistory || [];
+          order.paymentStatusHistory.push({
+            status: payment.status,
+            updatedBy: req.user._id,
+            notes: remarks || `Payment updated: Received ₹${numericReceivedAmount} by reception`,
+            updatedAt: new Date(),
+          });
+          await order.save();
+        }
+      }
+
+      await payment.save();
+
+      res.json({
+        message: "Payment status updated successfully",
+        payment: {
+          paymentId: payment._id,
+          totalAmount: totalAmountDue,
+          paidAmount: payment.paidAmount,
+          remainingAmount: totalAmountDue - payment.paidAmount,
+          status: payment.status,
+          receivedAmount: numericReceivedAmount,
+          remarks: remarks,
+          updatedBy: req.user.name,
+          updatedAt: new Date(),
         },
-        products: payment.orderDetails?.products.map((p) => ({
-          productName: p.product?.name || "N/A",
-          productType: p.product?.type || "N/A",
-          boxes: Number(p.boxes) || 0,
-          price: Number(p.price) || 0,
-        })) || [],
-        totalAmount: payment.orderDetails 
-          ? Number(payment.orderDetails.totalAmount)
-          : Number(payment.amount),
-        paidAmount: paidAmount,
-        remainingAmount: remainingAmount,
-        paymentPercentage: ((paidAmount / totalAmountWithDelivery) * 100).toFixed(2),
-        paymentHistory: payment.paymentHistory.map((entry) => ({
-          ...entry.toObject(),
-          submittedAmount: Number(entry.submittedAmount),
-          verifiedAmount: Number(entry.verifiedAmount),
-        })),
-        deliveryCharge: payment.orderDetails 
-          ? Number(payment.orderDetails.deliveryCharge || 0)
-          : 0,
-        totalAmountWithDelivery: totalAmountWithDelivery,
-        paymentMethod: payment.orderDetails?.paymentMethod || "N/A",
-        paymentStatus: payment.status,
-        orderStatus: payment.orderDetails?.orderStatus || "N/A",
-        shippingAddress: payment.orderDetails?.shippingAddress || {},
-        firmName: payment.orderDetails?.firmName || payment.user?.customerDetails?.firmName || "N/A",
-        gstNumber: payment.orderDetails?.gstNumber || "N/A",
-        createdAt: payment.createdAt,
-        updatedAt: payment.updatedAt,
-      };
-    });
-
-    res.json({
-      count: formattedPayments.length,
-      partialPayments: formattedPayments,
-    });
-  } catch (error) {
-    console.error("Error fetching partial payments:", error);
-    res.status(500).json({
-      error: "Error fetching partial payments",
-      details: error.message,
-    });
-  }
-},
-
-// Get payment details by ID
-getPaymentDetails: async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-
-    const payment = await Payment.findById(paymentId)
-      .populate("user", "name phoneNumber email customerDetails")
-      .populate({
-        path: "orderDetails",
-        populate: {
-          path: "products.product",
-          select: "name type price",
-        },
-      })
-      .populate("paymentHistory.verifiedBy", "name");
-
-    if (!payment) {
-      return res.status(404).json({ error: "Payment not found" });
-    }
-
-    const totalAmountWithDelivery = payment.orderDetails 
-      ? Number(payment.orderDetails.totalAmountWithDelivery)
-      : Number(payment.amount);
-    const paidAmount = Number(payment.paidAmount) || 0;
-    const remainingAmount = totalAmountWithDelivery - paidAmount;
-
-    res.json({
-      payment: {
-        paymentId: payment._id,
-        orderId: payment.orderDetails?._id,
-        user: {
-          name: payment.user?.name,
-          firmName: payment.user?.customerDetails?.firmName,
-          userCode: payment.user?.customerDetails?.userCode,
-          phoneNumber: payment.user?.phoneNumber,
-          email: payment.user?.email,
-        },
-        products: payment.orderDetails?.products.map((p) => ({
-          productName: p.product?.name,
-          productType: p.product?.type,
-          boxes: p.boxes,
-          price: p.price,
-          totalPrice: p.boxes * p.price,
-        })),
-        totalAmount: payment.orderDetails 
-          ? Number(payment.orderDetails.totalAmount)
-          : Number(payment.amount),
-        deliveryCharge: payment.orderDetails 
-          ? Number(payment.orderDetails.deliveryCharge || 0)
-          : 0,
-        totalAmountWithDelivery: totalAmountWithDelivery,
-        paidAmount: paidAmount,
-        remainingAmount: remainingAmount,
-        paymentPercentage: ((paidAmount / totalAmountWithDelivery) * 100).toFixed(2),
-        status: payment.status,
-        paymentMethod: payment.orderDetails?.paymentMethod,
-        orderStatus: payment.orderDetails?.orderStatus,
-        paymentHistory: payment.paymentHistory.map((entry) => ({
-          referenceId: entry.referenceId,
-          submittedAmount: Number(entry.submittedAmount),
-          verifiedAmount: Number(entry.verifiedAmount),
-          status: entry.status,
-          verifiedBy: entry.verifiedBy?.name,
-          verificationNotes: entry.verificationNotes,
-          submissionDate: entry.submissionDate,
-          verificationDate: entry.verificationDate,
-        })),
-        shippingAddress: payment.orderDetails?.shippingAddress,
-        firmName: payment.orderDetails?.firmName,
-        gstNumber: payment.orderDetails?.gstNumber,
-        createdAt: payment.createdAt,
-        updatedAt: payment.updatedAt,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching payment details:", error);
-    res.status(500).json({
-      error: "Error fetching payment details",
-      details: error.message,
-    });
-  }
-},
-
-getSubmittedPayments : async (req, res) => {
-  try {
-    const payments = await Payment.find({ status: "submitted" })
-      .populate(
-        "user",
-        "name email phoneNumber customerDetails.firmName customerDetails.userCode"
-      )
-      .populate(
-        "orderDetails",
-        "totalAmountWithDelivery paymentMethod shippingAddress orderStatus"
-      )
-      .sort({ createdAt: -1 });
-
-    const formattedPayments = payments.map((payment) => ({
-      ...payment.toObject(),
-      amount: Number(payment.amount),
-      paidAmount: Number(payment.paidAmount),
-      remainingAmount: Number(payment.remainingAmount),
-      paymentHistory: payment.paymentHistory.map((entry) => ({
-        ...entry.toObject(),
-        submittedAmount: Number(entry.submittedAmount),
-        verifiedAmount: Number(entry.verifiedAmount),
-      })),
-      orderDetails: payment.orderDetails ? {
-        ...payment.orderDetails.toObject(),
-        totalAmountWithDelivery: Number(
-          payment.orderDetails.totalAmountWithDelivery
-        ),
-      } : null,
-    }));
-
-    res.json({ payments: formattedPayments });
-  } catch (error) {
-    console.error("Error fetching submitted payments:", error);
-    res.status(500).json({
-      error: "Error fetching submitted payments",
-      details: error.message,
-    });
-  }
-},
-
-verifyPayment : async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    const { verifiedAmount, verificationNotes, status } = req.body;
-
-    if (!verifiedAmount) {
-      return res.status(400).json({
-        error: "Verified amount is required",
+      });
+    } catch (error) {
+      console.error("Error updating payment status:", error);
+      res.status(500).json({
+        error: "Error updating payment status",
+        details: error.message,
       });
     }
+  },
 
-    const numericVerifiedAmount = Number(verifiedAmount);
-    if (isNaN(numericVerifiedAmount) || numericVerifiedAmount < 0) {
-      return res.status(400).json({
-        error: "Verified amount must be a valid positive number",
-      });
-    }
 
-    const payment = await Payment.findById(paymentId);
-    if (!payment) {
-      return res.status(404).json({ error: "Payment not found" });
-    }
 
-    if (payment.status !== "submitted") {
-      return res.status(400).json({
-        error: "Only submitted payments can be verified",
-      });
-    }
+  getPartialPayments: async (req, res) => {
+    try {
+      const partialPayments = await Payment.find({ status: "partial" })
+        .populate(
+          "user",
+          "name phoneNumber email customerDetails.firmName customerDetails.userCode"
+        )
+        .populate({
+          path: "orderDetails",
+          populate: {
+            path: "products.product",
+            select: "name type",
+          },
+        })
+        .sort({ createdAt: -1 });
 
-    // Find the latest submitted payment entry
-    const latestSubmission = payment.paymentHistory
-      .filter(entry => entry.status === "submitted")
-      .sort((a, b) => new Date(b.submissionDate) - new Date(a.submissionDate))[0];
+      const formattedPayments = partialPayments.map((payment) => {
+        const totalAmountWithDelivery = payment.orderDetails
+          ? Number(payment.orderDetails.totalAmountWithDelivery)
+          : Number(payment.amount);
+        const paidAmount = Number(payment.paidAmount) || 0;
+        const remainingAmount = totalAmountWithDelivery - paidAmount;
 
-    if (!latestSubmission) {
-      return res.status(400).json({
-        error: "No submitted payment found to verify",
-      });
-    }
-
-    // Update the payment history entry
-    latestSubmission.status = status || "verified";
-    latestSubmission.verifiedAmount = numericVerifiedAmount;
-    latestSubmission.verifiedBy = req.user._id;
-    latestSubmission.verificationNotes = verificationNotes;
-    latestSubmission.verificationDate = new Date();
-
-    // Update payment totals
-    payment.paidAmount = (payment.paidAmount || 0) + numericVerifiedAmount;
-    
-    if (payment.paidAmount >= payment.amount) {
-      payment.status = "completed";
-    } else {
-      payment.status = "verified_partial";
-    }
-
-    await payment.save();
-
-    res.json({
-      message: "Payment verified successfully",
-      payment: {
-        paymentId: payment._id,
-        verifiedAmount: numericVerifiedAmount,
-        totalAmount: payment.amount,
-        paidAmount: payment.paidAmount,
-        remainingAmount: payment.remainingAmount,
-        status: payment.status,
-        verificationNotes: verificationNotes,
-        verifiedBy: req.user.name,
-      },
-    });
-  } catch (error) {
-    console.error("Error verifying payment:", error);
-    res.status(500).json({
-      error: "Error verifying payment",
-      details: error.message,
-    });
-  }
-},
-
-downloadPendingPaymentsExcel : async (req, res) => {
-  try {
-    const pendingPayments = await Payment.find({ status: "pending" })
-      .populate(
-        "user",
-        "name phoneNumber email customerDetails.firmName customerDetails.userCode"
-      )
-      .populate({
-        path: "orderDetails",
-        populate: {
-          path: "products.product",
-          select: "name type",
-        },
-      })
-      .sort({ createdAt: -1 });
-
-    const formattedPayments = pendingPayments.map((payment) => {
-      if (!payment.orderDetails) {
         return {
           paymentId: payment._id,
-          orderId: "N/A",
+          orderId: payment.orderDetails?._id || "N/A",
           user: {
             name: payment.user?.name || "N/A",
             firmName: payment.user?.customerDetails?.firmName || "N/A",
@@ -2087,128 +1803,405 @@ downloadPendingPaymentsExcel : async (req, res) => {
             phoneNumber: payment.user?.phoneNumber || "N/A",
             email: payment.user?.email || "N/A",
           },
-          products: [],
+          products: payment.orderDetails?.products.map((p) => ({
+            productName: p.product?.name || "N/A",
+            productType: p.product?.type || "N/A",
+            boxes: Number(p.boxes) || 0,
+            price: Number(p.price) || 0,
+          })) || [],
+          totalAmount: payment.orderDetails
+            ? Number(payment.orderDetails.totalAmount)
+            : Number(payment.amount),
+          paidAmount: paidAmount,
+          remainingAmount: remainingAmount,
+          paymentPercentage: ((paidAmount / totalAmountWithDelivery) * 100).toFixed(2),
+          paymentHistory: payment.paymentHistory.map((entry) => ({
+            ...entry.toObject(),
+            submittedAmount: Number(entry.submittedAmount),
+            verifiedAmount: Number(entry.verifiedAmount),
+          })),
+          deliveryCharge: payment.orderDetails
+            ? Number(payment.orderDetails.deliveryCharge || 0)
+            : 0,
+          totalAmountWithDelivery: totalAmountWithDelivery,
+          paymentMethod: payment.orderDetails?.paymentMethod || "N/A",
+          paymentStatus: payment.status,
+          orderStatus: payment.orderDetails?.orderStatus || "N/A",
+          shippingAddress: payment.orderDetails?.shippingAddress || {},
+          firmName: payment.orderDetails?.firmName || payment.user?.customerDetails?.firmName || "N/A",
+          gstNumber: payment.orderDetails?.gstNumber || "N/A",
+          createdAt: payment.createdAt,
+          updatedAt: payment.updatedAt,
+        };
+      });
+
+      res.json({
+        count: formattedPayments.length,
+        partialPayments: formattedPayments,
+      });
+    } catch (error) {
+      console.error("Error fetching partial payments:", error);
+      res.status(500).json({
+        error: "Error fetching partial payments",
+        details: error.message,
+      });
+    }
+  },
+
+  // Get payment details by ID
+  getPaymentDetails: async (req, res) => {
+    try {
+      const { paymentId } = req.params;
+
+      const payment = await Payment.findById(paymentId)
+        .populate("user", "name phoneNumber email customerDetails")
+        .populate({
+          path: "orderDetails",
+          populate: {
+            path: "products.product",
+            select: "name type price",
+          },
+        })
+        .populate("paymentHistory.verifiedBy", "name");
+
+      if (!payment) {
+        return res.status(404).json({ error: "Payment not found" });
+      }
+
+      const totalAmountWithDelivery = payment.orderDetails
+        ? Number(payment.orderDetails.totalAmountWithDelivery)
+        : Number(payment.amount);
+      const paidAmount = Number(payment.paidAmount) || 0;
+      const remainingAmount = totalAmountWithDelivery - paidAmount;
+
+      res.json({
+        payment: {
+          paymentId: payment._id,
+          orderId: payment.orderDetails?._id,
+          user: {
+            name: payment.user?.name,
+            firmName: payment.user?.customerDetails?.firmName,
+            userCode: payment.user?.customerDetails?.userCode,
+            phoneNumber: payment.user?.phoneNumber,
+            email: payment.user?.email,
+          },
+          products: payment.orderDetails?.products.map((p) => ({
+            productName: p.product?.name,
+            productType: p.product?.type,
+            boxes: p.boxes,
+            price: p.price,
+            totalPrice: p.boxes * p.price,
+          })),
+          totalAmount: payment.orderDetails
+            ? Number(payment.orderDetails.totalAmount)
+            : Number(payment.amount),
+          deliveryCharge: payment.orderDetails
+            ? Number(payment.orderDetails.deliveryCharge || 0)
+            : 0,
+          totalAmountWithDelivery: totalAmountWithDelivery,
+          paidAmount: paidAmount,
+          remainingAmount: remainingAmount,
+          paymentPercentage: ((paidAmount / totalAmountWithDelivery) * 100).toFixed(2),
+          status: payment.status,
+          paymentMethod: payment.orderDetails?.paymentMethod,
+          orderStatus: payment.orderDetails?.orderStatus,
+          paymentHistory: payment.paymentHistory.map((entry) => ({
+            referenceId: entry.referenceId,
+            submittedAmount: Number(entry.submittedAmount),
+            verifiedAmount: Number(entry.verifiedAmount),
+            status: entry.status,
+            verifiedBy: entry.verifiedBy?.name,
+            verificationNotes: entry.verificationNotes,
+            submissionDate: entry.submissionDate,
+            verificationDate: entry.verificationDate,
+          })),
+          shippingAddress: payment.orderDetails?.shippingAddress,
+          firmName: payment.orderDetails?.firmName,
+          gstNumber: payment.orderDetails?.gstNumber,
+          createdAt: payment.createdAt,
+          updatedAt: payment.updatedAt,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching payment details:", error);
+      res.status(500).json({
+        error: "Error fetching payment details",
+        details: error.message,
+      });
+    }
+  },
+
+  getSubmittedPayments: async (req, res) => {
+    try {
+      const payments = await Payment.find({ status: "submitted" })
+        .populate(
+          "user",
+          "name email phoneNumber customerDetails.firmName customerDetails.userCode"
+        )
+        .populate(
+          "orderDetails",
+          "totalAmountWithDelivery paymentMethod shippingAddress orderStatus"
+        )
+        .sort({ createdAt: -1 });
+
+      const formattedPayments = payments.map((payment) => ({
+        ...payment.toObject(),
+        amount: Number(payment.amount),
+        paidAmount: Number(payment.paidAmount),
+        remainingAmount: Number(payment.remainingAmount),
+        paymentHistory: payment.paymentHistory.map((entry) => ({
+          ...entry.toObject(),
+          submittedAmount: Number(entry.submittedAmount),
+          verifiedAmount: Number(entry.verifiedAmount),
+        })),
+        orderDetails: payment.orderDetails ? {
+          ...payment.orderDetails.toObject(),
+          totalAmountWithDelivery: Number(
+            payment.orderDetails.totalAmountWithDelivery
+          ),
+        } : null,
+      }));
+
+      res.json({ payments: formattedPayments });
+    } catch (error) {
+      console.error("Error fetching submitted payments:", error);
+      res.status(500).json({
+        error: "Error fetching submitted payments",
+        details: error.message,
+      });
+    }
+  },
+
+  verifyPayment: async (req, res) => {
+    try {
+      const { paymentId } = req.params;
+      const { verifiedAmount, verificationNotes, status } = req.body;
+
+      if (!verifiedAmount) {
+        return res.status(400).json({
+          error: "Verified amount is required",
+        });
+      }
+
+      const numericVerifiedAmount = Number(verifiedAmount);
+      if (isNaN(numericVerifiedAmount) || numericVerifiedAmount < 0) {
+        return res.status(400).json({
+          error: "Verified amount must be a valid positive number",
+        });
+      }
+
+      const payment = await Payment.findById(paymentId);
+      if (!payment) {
+        return res.status(404).json({ error: "Payment not found" });
+      }
+
+      if (payment.status !== "submitted") {
+        return res.status(400).json({
+          error: "Only submitted payments can be verified",
+        });
+      }
+
+      // Find the latest submitted payment entry
+      const latestSubmission = payment.paymentHistory
+        .filter(entry => entry.status === "submitted")
+        .sort((a, b) => new Date(b.submissionDate) - new Date(a.submissionDate))[0];
+
+      if (!latestSubmission) {
+        return res.status(400).json({
+          error: "No submitted payment found to verify",
+        });
+      }
+
+      // Update the payment history entry
+      latestSubmission.status = status || "verified";
+      latestSubmission.verifiedAmount = numericVerifiedAmount;
+      latestSubmission.verifiedBy = req.user._id;
+      latestSubmission.verificationNotes = verificationNotes;
+      latestSubmission.verificationDate = new Date();
+
+      // Update payment totals
+      payment.paidAmount = (payment.paidAmount || 0) + numericVerifiedAmount;
+
+      if (payment.paidAmount >= payment.amount) {
+        payment.status = "completed";
+      } else {
+        payment.status = "verified_partial";
+      }
+
+      await payment.save();
+
+      res.json({
+        message: "Payment verified successfully",
+        payment: {
+          paymentId: payment._id,
+          verifiedAmount: numericVerifiedAmount,
+          totalAmount: payment.amount,
+          paidAmount: payment.paidAmount,
+          remainingAmount: payment.remainingAmount,
+          status: payment.status,
+          verificationNotes: verificationNotes,
+          verifiedBy: req.user.name,
+        },
+      });
+    } catch (error) {
+      console.error("Error verifying payment:", error);
+      res.status(500).json({
+        error: "Error verifying payment",
+        details: error.message,
+      });
+    }
+  },
+
+  downloadPendingPaymentsExcel: async (req, res) => {
+    try {
+      const pendingPayments = await Payment.find({ status: "pending" })
+        .populate(
+          "user",
+          "name phoneNumber email customerDetails.firmName customerDetails.userCode"
+        )
+        .populate({
+          path: "orderDetails",
+          populate: {
+            path: "products.product",
+            select: "name type",
+          },
+        })
+        .sort({ createdAt: -1 });
+
+      const formattedPayments = pendingPayments.map((payment) => {
+        if (!payment.orderDetails) {
+          return {
+            paymentId: payment._id,
+            orderId: "N/A",
+            user: {
+              name: payment.user?.name || "N/A",
+              firmName: payment.user?.customerDetails?.firmName || "N/A",
+              userCode: payment.user?.customerDetails?.userCode || "N/A",
+              phoneNumber: payment.user?.phoneNumber || "N/A",
+              email: payment.user?.email || "N/A",
+            },
+            products: [],
+            totalAmount: Number(payment.amount) || 0,
+            paidAmount: Number(payment.paidAmount) || 0,
+            remainingAmount: Number(payment.remainingAmount) || 0,
+            deliveryCharge: 0,
+            totalAmountWithDelivery: Number(payment.amount) || 0,
+            paymentMethod: "N/A",
+            paymentStatus: payment.status,
+            orderStatus: "N/A",
+            shippingAddress: {},
+            firmName: payment.user?.customerDetails?.firmName || "N/A",
+            gstNumber: "N/A",
+            createdAt: payment.createdAt,
+          };
+        }
+
+        return {
+          paymentId: payment._id,
+          orderId: payment.orderDetails._id,
+          user: {
+            name: payment.user?.name || "N/A",
+            firmName: payment.user?.customerDetails?.firmName || "N/A",
+            userCode: payment.user?.customerDetails?.userCode || "N/A",
+            phoneNumber: payment.user?.phoneNumber || "N/A",
+            email: payment.user?.email || "N/A",
+          },
+          products: payment.orderDetails.products.map((p) => ({
+            productName: p.product?.name || "N/A",
+            boxes: Number(p.boxes) || 0,
+            price: Number(p.price) || 0,
+          })),
           totalAmount: Number(payment.amount) || 0,
           paidAmount: Number(payment.paidAmount) || 0,
           remainingAmount: Number(payment.remainingAmount) || 0,
-          deliveryCharge: 0,
-          totalAmountWithDelivery: Number(payment.amount) || 0,
-          paymentMethod: "N/A",
-          paymentStatus: payment.status,
-          orderStatus: "N/A",
-          shippingAddress: {},
-          firmName: payment.user?.customerDetails?.firmName || "N/A",
-          gstNumber: "N/A",
+          deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
+          totalAmountWithDelivery:
+            Number(payment.orderDetails.totalAmountWithDelivery) || 0,
+          paymentMethod: payment.orderDetails.paymentMethod,
+          paymentStatus: payment.orderDetails.paymentStatus,
+          orderStatus: payment.orderDetails.orderStatus,
+          shippingAddress: payment.orderDetails.shippingAddress,
+          firmName: payment.orderDetails.firmName,
+          gstNumber: payment.orderDetails.gstNumber || "N/A",
           createdAt: payment.createdAt,
         };
-      }
-
-      return {
-        paymentId: payment._id,
-        orderId: payment.orderDetails._id,
-        user: {
-          name: payment.user?.name || "N/A",
-          firmName: payment.user?.customerDetails?.firmName || "N/A",
-          userCode: payment.user?.customerDetails?.userCode || "N/A",
-          phoneNumber: payment.user?.phoneNumber || "N/A",
-          email: payment.user?.email || "N/A",
-        },
-        products: payment.orderDetails.products.map((p) => ({
-          productName: p.product?.name || "N/A",
-          boxes: Number(p.boxes) || 0,
-          price: Number(p.price) || 0,
-        })),
-        totalAmount: Number(payment.amount) || 0,
-        paidAmount: Number(payment.paidAmount) || 0,
-        remainingAmount: Number(payment.remainingAmount) || 0,
-        deliveryCharge: Number(payment.orderDetails.deliveryCharge || 0),
-        totalAmountWithDelivery:
-          Number(payment.orderDetails.totalAmountWithDelivery) || 0,
-        paymentMethod: payment.orderDetails.paymentMethod,
-        paymentStatus: payment.orderDetails.paymentStatus,
-        orderStatus: payment.orderDetails.orderStatus,
-        shippingAddress: payment.orderDetails.shippingAddress,
-        firmName: payment.orderDetails.firmName,
-        gstNumber: payment.orderDetails.gstNumber || "N/A",
-        createdAt: payment.createdAt,
-      };
-    });
-
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Pending Payments");
-
-    worksheet.columns = [
-      { header: "Payment ID", key: "paymentId", width: 15 },
-      { header: "Order ID", key: "orderId", width: 15 },
-      { header: "Customer Name", key: "customerName", width: 20 },
-      { header: "Firm Name", key: "firmName", width: 20 },
-      { header: "User Code", key: "userCode", width: 15 },
-      { header: "Phone Number", key: "phoneNumber", width: 15 },
-      { header: "Email", key: "email", width: 25 },
-      { header: "Products", key: "products", width: 30 },
-      { header: "Total Amount", key: "totalAmount", width: 15 },
-      { header: "Paid Amount", key: "paidAmount", width: 15 },
-      { header: "Remaining Amount", key: "remainingAmount", width: 15 },
-      { header: "Delivery Charge", key: "deliveryCharge", width: 15 },
-      { header: "Total with Delivery", key: "totalAmountWithDelivery", width: 20 },
-      { header: "Payment Method", key: "paymentMethod", width: 15 },
-      { header: "Payment Status", key: "paymentStatus", width: 15 },
-      { header: "Order Status", key: "orderStatus", width: 15 },
-      { header: "GST Number", key: "gstNumber", width: 15 },
-      { header: "Created Date", key: "createdAt", width: 20 },
-    ];
-
-    formattedPayments.forEach((payment) => {
-      worksheet.addRow({
-        paymentId: payment.paymentId,
-        orderId: payment.orderId,
-        customerName: payment.user.name,
-        firmName: payment.user.firmName,
-        userCode: payment.user.userCode,
-        phoneNumber: payment.user.phoneNumber,
-        email: payment.user.email,
-        products: payment.products
-          .map((p) => `${p.productName} (${p.boxes} boxes)`)
-          .join(", "),
-        totalAmount: payment.totalAmount,
-        paidAmount: payment.paidAmount,
-        remainingAmount: payment.remainingAmount,
-        deliveryCharge: payment.deliveryCharge,
-        totalAmountWithDelivery: payment.totalAmountWithDelivery,
-        paymentMethod: payment.paymentMethod,
-        paymentStatus: payment.paymentStatus,
-        orderStatus: payment.orderStatus,
-        gstNumber: payment.gstNumber,
-        createdAt: payment.createdAt.toLocaleDateString(),
       });
-    });
 
-    worksheet.getRow(1).font = { bold: true };
-    worksheet.getRow(1).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "D3D3D3" },
-    };
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Pending Payments");
 
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-    res.setHeader(
-      "Content-Disposition",
-      "attachment; filename=pending_payments.xlsx"
-    );
+      worksheet.columns = [
+        { header: "Payment ID", key: "paymentId", width: 15 },
+        { header: "Order ID", key: "orderId", width: 15 },
+        { header: "Customer Name", key: "customerName", width: 20 },
+        { header: "Firm Name", key: "firmName", width: 20 },
+        { header: "User Code", key: "userCode", width: 15 },
+        { header: "Phone Number", key: "phoneNumber", width: 15 },
+        { header: "Email", key: "email", width: 25 },
+        { header: "Products", key: "products", width: 30 },
+        { header: "Total Amount", key: "totalAmount", width: 15 },
+        { header: "Paid Amount", key: "paidAmount", width: 15 },
+        { header: "Remaining Amount", key: "remainingAmount", width: 15 },
+        { header: "Delivery Charge", key: "deliveryCharge", width: 15 },
+        { header: "Total with Delivery", key: "totalAmountWithDelivery", width: 20 },
+        { header: "Payment Method", key: "paymentMethod", width: 15 },
+        { header: "Payment Status", key: "paymentStatus", width: 15 },
+        { header: "Order Status", key: "orderStatus", width: 15 },
+        { header: "GST Number", key: "gstNumber", width: 15 },
+        { header: "Created Date", key: "createdAt", width: 20 },
+      ];
 
-    await workbook.xlsx.write(res);
-    res.end();
-  } catch (error) {
-    console.error("Error generating Excel file:", error);
-    res.status(500).json({
-      error: "Error generating Excel file",
-      details: error.message,
-    });
+      formattedPayments.forEach((payment) => {
+        worksheet.addRow({
+          paymentId: payment.paymentId,
+          orderId: payment.orderId,
+          customerName: payment.user.name,
+          firmName: payment.user.firmName,
+          userCode: payment.user.userCode,
+          phoneNumber: payment.user.phoneNumber,
+          email: payment.user.email,
+          products: payment.products
+            .map((p) => `${p.productName} (${p.boxes} boxes)`)
+            .join(", "),
+          totalAmount: payment.totalAmount,
+          paidAmount: payment.paidAmount,
+          remainingAmount: payment.remainingAmount,
+          deliveryCharge: payment.deliveryCharge,
+          totalAmountWithDelivery: payment.totalAmountWithDelivery,
+          paymentMethod: payment.paymentMethod,
+          paymentStatus: payment.paymentStatus,
+          orderStatus: payment.orderStatus,
+          gstNumber: payment.gstNumber,
+          createdAt: payment.createdAt.toLocaleDateString(),
+        });
+      });
+
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "D3D3D3" },
+      };
+
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        "attachment; filename=pending_payments.xlsx"
+      );
+
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error("Error generating Excel file:", error);
+      res.status(500).json({
+        error: "Error generating Excel file",
+        details: error.message,
+      });
+    }
   }
-}
 };
 
 module.exports = receptionController;

@@ -39,4 +39,7 @@ app.use("/api/dispatch", dispatchRoutes);
 app.use("/api/marketing", marketingRoutes);
 
 const PORT = process.env.PORT || 5000;
-module.exports = app;
+app.listen(PORT,()=>{
+  console.log(`server is running on ${PORT}`)
+})
+// module.exports = app;

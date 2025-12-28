@@ -1013,8 +1013,6 @@ class StockController {
     try {
       const {
         rawMaterials,
-        capType,
-        capColor,
         quantityProduced,
         boxesUsed,
         bagsUsed,
@@ -1027,26 +1025,40 @@ class StockController {
 
       const userId = req.user.id;
 
-      if (!rawMaterials || !capType || !capColor || !quantityProduced) {
+      // ---------------- BASIC VALIDATION ----------------
+      if (!rawMaterials || !quantityProduced || !capId) {
         return res.status(400).json({
           success: false,
-          message: "Raw materials, cap type, color and quantity produced are required"
+          message: "Raw materials, capId and quantity produced are required"
         });
       }
 
-      const availableColors = [
-        "White", "Blue", "Red", "Green", "Yellow", "Black", "Transparent", "Other"
-      ];
-
-      if (!availableColors.includes(capColor)) {
+      if (quantityProduced <= 0) {
         return res.status(400).json({
           success: false,
-          message: `Invalid color. Available colors: ${availableColors.join(", ")}`
+          message: "Quantity produced must be greater than zero"
         });
       }
 
-      // Validate and deduct raw materials
-      for (let rm of rawMaterials) {
+      // ==================================================
+      // 1. FETCH CAP (SOURCE OF TRUTH)
+      // ==================================================
+      const cap = await Cap.findById(capId);
+
+      if (!cap || !cap.isActive) {
+        return res.status(404).json({
+          success: false,
+          message: "Cap not found or inactive"
+        });
+      }
+
+      const capType = cap.neckType; // or cap.type if you have it
+      const capColor = cap.color;
+
+      // ==================================================
+      // 2. VALIDATE & DEDUCT RAW MATERIALS
+      // ==================================================
+      for (const rm of rawMaterials) {
         const material = await RawMaterial.findById(rm.materialId);
         if (!material) {
           return res.status(404).json({
@@ -1068,7 +1080,9 @@ class StockController {
         );
       }
 
-      // Deduct packaging materials if used
+      // ==================================================
+      // 3. DEDUCT PACKAGING MATERIALS
+      // ==================================================
       if (boxesUsed && boxesUsed > 0) {
         const capBoxes = await RawMaterial.findOne({ itemCode: "CAP_BOXES" });
         if (capBoxes) {
@@ -1089,14 +1103,20 @@ class StockController {
         }
       }
 
+      // ==================================================
+      // 4. CALCULATE WASTAGE
+      // ==================================================
       const totalWastage = (wastageType1 || 0) + (wastageType2 || 0);
 
-      // Create production record
+      // ==================================================
+      // 5. CREATE CAP PRODUCTION RECORD
+      // ==================================================
       const production = new CapProduction({
         rawMaterials: rawMaterials.map(rm => ({
           material: rm.materialId,
           quantityUsed: rm.quantityUsed
         })),
+        capId,
         capType,
         capColor,
         quantityProduced,
@@ -1109,10 +1129,14 @@ class StockController {
         wastageType2: wastageType2 || 0,
         remarks,
         productionDate: productionDate ? new Date(productionDate) : new Date(),
-        recordedBy: userId,
+        recordedBy: userId
       });
 
       await production.save();
+
+      // ==================================================
+      // 6. UPDATE CAP STOCK (INVENTORY)
+      // ==================================================
       const updatedCap = await Cap.findOneAndUpdate(
         { _id: capId, isActive: true },
         {
@@ -1122,44 +1146,44 @@ class StockController {
         { new: true }
       );
 
-      console.log("Updated quantity:", updatedCap.quantityAvailable);
-      console.log("Capavailable", updatedCap)
-      // Record wastages
+      // ==================================================
+      // 7. RECORD WASTAGE
+      // ==================================================
       if (wastageType1 && wastageType1 > 0) {
-        const wastage1 = new Wastage({
+        await new Wastage({
           wastageType: "Type 1: Reusable Wastage",
           source: "Cap",
           quantityGenerated: wastageType1,
           quantityReused: 0,
           remarks: `Generated from ${capColor} ${capType} cap production`,
-          recordedBy: userId,
-        });
-        await wastage1.save();
+          recordedBy: userId
+        }).save();
       }
 
       if (wastageType2 && wastageType2 > 0) {
-        const wastage2 = new Wastage({
+        await new Wastage({
           wastageType: "Type 2: Non-reusable / Scrap",
           source: "Cap",
           quantityGenerated: wastageType2,
           quantityReused: 0,
           quantityScrapped: wastageType2,
           remarks: `Generated from ${capColor} ${capType} cap production`,
-          recordedBy: userId,
-        });
-        await wastage2.save();
+          recordedBy: userId
+        }).save();
       }
 
       await production.populate("rawMaterials.material", "itemName itemCode unit");
       await production.populate("recordedBy", "name");
 
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         data: production,
         message: `${capColor} ${capType} cap production recorded successfully`
       });
+
     } catch (error) {
-      res.status(500).json({
+      console.error("Error in cap production:", error);
+      return res.status(500).json({
         success: false,
         message: error.message
       });
@@ -1552,15 +1576,24 @@ class StockController {
         preformType,
         boxesProduced,
         bottlesPerBox,
-        bottleCategory,
+        bottleCategoryId,
         labelId,
         capId,
         remarks,
         productionDate
       } = req.body;
+
       const userId = req.user.id;
 
-      if (!preformType || !boxesProduced || !bottlesPerBox || !bottleCategory || !labelId || !capId) {
+      // ---------------- BASIC VALIDATION ----------------
+      if (
+        !preformType ||
+        !boxesProduced ||
+        !bottlesPerBox ||
+        !bottleCategoryId ||
+        !labelId ||
+        !capId
+      ) {
         return res.status(400).json({
           success: false,
           message: "All fields including label and cap are required"
@@ -1574,24 +1607,69 @@ class StockController {
         });
       }
 
-      const totalBottles = boxesProduced * bottlesPerBox;
+      // ---------------- SAFE CALCULATION ----------------
+      const totalBottles = Number(boxesProduced) * Number(bottlesPerBox);
 
+      if (!Number.isInteger(totalBottles) || totalBottles <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid bottle calculation"
+        });
+      }
+
+      // ---------------- SHRINK ROLL CALCULATION ----------------
       const shrinkRollFormula = await Formula.findOne({ name: "Shrink Roll per Box" });
-      const shrinkRollPerBox = shrinkRollFormula ? parseFloat(shrinkRollFormula.formula) : 50;
+      const shrinkRollPerBox = shrinkRollFormula
+        ? Number(shrinkRollFormula.formula)
+        : 50;
+
       const totalShrinkRoll = boxesProduced * shrinkRollPerBox;
 
-      const mongoose = require('mongoose');
+      // ---------------- TRANSACTION START ----------------
+      const mongoose = require("mongoose");
       const session = await mongoose.startSession();
       session.startTransaction();
 
       try {
-        // 1. CHECK AND DEDUCT PREFORMS
+        // ==================================================
+        // FETCH BOTTLE CATEGORY (CRITICAL FIX)
+        // ==================================================
+        const bottleProduct = await Product.findById(bottleCategoryId)
+          .select("name category type")
+          .session(session);
+
+        if (!bottleProduct) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(404).json({
+            success: false,
+            message: "Bottle category not found"
+          });
+        }
+
+        const bottleCategory = bottleProduct.category;
+
+        // ==================================================
+        // 1. CHECK & DEDUCT PREFORMS (FIFO)
+        // ==================================================
         const preformProductions = await PerformProduction.find({
           outcomeType: preformType,
-          $expr: { $gt: [{ $subtract: ["$quantityProduced", { $add: ["$wastageKg", { $ifNull: ["$usedInBottles", 0] }] }] }, 0] }
-        }).sort({ productionDate: 1 }).session(session);
+          $expr: {
+            $gt: [
+              {
+                $subtract: [
+                  "$quantityProduced",
+                  { $add: ["$wastageKg", { $ifNull: ["$usedInBottles", 0] }] }
+                ]
+              },
+              0
+            ]
+          }
+        })
+          .sort({ productionDate: 1 })
+          .session(session);
 
-        if (!preformProductions || preformProductions.length === 0) {
+        if (!preformProductions.length) {
           await session.abortTransaction();
           session.endSession();
           return res.status(404).json({
@@ -1604,7 +1682,10 @@ class StockController {
         const preformBatchUsage = [];
 
         preformProductions.forEach(prod => {
-          const available = prod.quantityProduced - (prod.wastageKg || 0) - (prod.usedInBottles || 0);
+          const available =
+            prod.quantityProduced -
+            (prod.wastageKg || 0) -
+            (prod.usedInBottles || 0);
           totalPreformsAvailable += Math.max(0, available);
         });
 
@@ -1617,12 +1698,16 @@ class StockController {
           });
         }
 
-        // Deduct preforms using FIFO
         let remainingToDeduct = totalBottles;
-        for (let prod of preformProductions) {
+
+        for (const prod of preformProductions) {
           if (remainingToDeduct <= 0) break;
 
-          const available = prod.quantityProduced - (prod.wastageKg || 0) - (prod.usedInBottles || 0);
+          const available =
+            prod.quantityProduced -
+            (prod.wastageKg || 0) -
+            (prod.usedInBottles || 0);
+
           if (available > 0) {
             const toDeduct = Math.min(available, remainingToDeduct);
 
@@ -1642,65 +1727,57 @@ class StockController {
           }
         }
 
-        // 2. CHECK AND DEDUCT LABELS
-        const label = await Label.findById(labelId).session(session);
+        // ==================================================
+        // 2. CHECK & DEDUCT LABELS (ATOMIC)
+        // ==================================================
+        const label = await Label.findOneAndUpdate(
+          {
+            _id: labelId,
+            quantityAvailable: { $gte: totalBottles }
+          },
+          {
+            $inc: { quantityAvailable: -totalBottles },
+            $set: { lastUpdatedBy: userId }
+          },
+          { new: true, session }
+        );
+
         if (!label) {
           await session.abortTransaction();
           session.endSession();
-          return res.status(404).json({
-            success: false,
-            message: "Label not found"
-          });
-        }
-
-        if (label.quantityAvailable < totalBottles) {
-          await session.abortTransaction();
-          session.endSession();
           return res.status(400).json({
             success: false,
-            message: `Insufficient label stock. Available: ${label.quantityAvailable}, Required: ${totalBottles}`
+            message: "Insufficient label stock or label not found"
           });
         }
 
-        await Label.findByIdAndUpdate(
-          labelId,
+        // ==================================================
+        // 3. CHECK & DEDUCT CAPS (ATOMIC)
+        // ==================================================
+        const cap = await Cap.findOneAndUpdate(
+          {
+            _id: capId,
+            quantityAvailable: { $gte: totalBottles }
+          },
           {
             $inc: { quantityAvailable: -totalBottles },
-            lastUpdatedBy: userId
+            $set: { lastUpdatedBy: userId }
           },
-          { session }
+          { new: true, session }
         );
 
-        // 3. CHECK AND DEDUCT CAPS
-        const cap = await Cap.findById(capId).session(session);
         if (!cap) {
           await session.abortTransaction();
           session.endSession();
-          return res.status(404).json({
-            success: false,
-            message: "Cap not found"
-          });
-        }
-
-        if (cap.quantityAvailable < totalBottles) {
-          await session.abortTransaction();
-          session.endSession();
           return res.status(400).json({
             success: false,
-            message: `Insufficient cap stock. Available: ${cap.quantityAvailable}, Required: ${totalBottles}`
+            message: "Insufficient cap stock or cap not found"
           });
         }
 
-        await Cap.findByIdAndUpdate(
-          capId,
-          {
-            $inc: { quantityAvailable: -totalBottles },
-            lastUpdatedBy: userId
-          },
-          { session }
-        );
-
+        // ==================================================
         // 4. DEDUCT SHRINK ROLL
+        // ==================================================
         const shrinkRoll = await RawMaterial.findOne({
           itemCode: "SHRINK_ROLL",
           isActive: true
@@ -1712,7 +1789,7 @@ class StockController {
             session.endSession();
             return res.status(400).json({
               success: false,
-              message: `Insufficient Shrink Roll. Available: ${shrinkRoll.currentStock} gm, Required: ${totalShrinkRoll} gm`
+              message: `Insufficient Shrink Roll. Available: ${shrinkRoll.currentStock}, Required: ${totalShrinkRoll}`
             });
           }
 
@@ -1723,20 +1800,22 @@ class StockController {
           );
         }
 
+        // ==================================================
         // 5. CREATE BOTTLE PRODUCTION RECORD
+        // ==================================================
         const production = new BottleProduction({
           preformType,
           boxesProduced,
           bottlesPerBox,
           bottleCategory,
           labelUsed: {
-            labelId: labelId,
+            labelId,
             bottleName: label.bottleName,
             category: label.bottleCategory,
             quantity: totalBottles
           },
           capUsed: {
-            capId: capId,
+            capId,
             neckType: cap.neckType,
             size: cap.size,
             color: cap.color,
@@ -1748,24 +1827,21 @@ class StockController {
             labelsUsed: totalBottles,
             capsUsed: totalBottles,
             preformUsed: totalBottles,
-            preformBatchUsage: preformBatchUsage
+            preformBatchUsage
           },
           remarks,
           productionDate: productionDate ? new Date(productionDate) : new Date(),
-          recordedBy: userId,
+          recordedBy: userId
         });
 
         await production.save({ session });
 
-        // 6. UPDATE PRODUCT STOCK (Auto-update bottle stock)
-        const productName = `${label.bottleName} ${bottleCategory}`;
-        let product = await Product.findOne({
-          name: productName,
-          category: bottleCategory
-        }).session(session);
+        // ==================================================
+        // 6. UPDATE PRODUCT STOCK (FIXED)
+        // ==================================================
+        let product = await Product.findById(bottleCategoryId).session(session);
 
         if (product) {
-          // Update existing product
           await Product.findByIdAndUpdate(
             product._id,
             {
@@ -1773,10 +1849,10 @@ class StockController {
               $push: {
                 stockRemarks: {
                   $each: [{
-                    message: `Production: ${boxesProduced} boxes added from bottle production`,
+                    message: `Production: ${boxesProduced} boxes added`,
                     updatedBy: userId,
                     boxes: boxesProduced,
-                    changeType: 'addition',
+                    changeType: "addition",
                     productionReference: production._id
                   }],
                   $position: 0
@@ -1785,62 +1861,18 @@ class StockController {
             },
             { session }
           );
-
-          // Update Stock history
-          let stockUpdate = await Stock.findOne({ productId: product._id }).session(session);
-          if (!stockUpdate) {
-            stockUpdate = new Stock({
-              productId: product._id,
-              quantity: product.boxes + boxesProduced,
-              updatedBy: userId,
-              updateHistory: [],
-            });
-          }
-
-          stockUpdate.updateQuantity(
-            product.boxes + boxesProduced,
-            userId,
-            'addition',
-            `Auto-updated from bottle production`,
-            boxesProduced
-          );
-          await stockUpdate.save({ session });
         }
 
+        // ---------------- COMMIT ----------------
         await session.commitTransaction();
         session.endSession();
 
         await production.populate("recordedBy", "name");
 
-        res.status(201).json({
+        return res.status(201).json({
           success: true,
-          data: {
-            production,
-            materialsUsed: {
-              preform: {
-                type: preformType,
-                quantity: totalBottles,
-                batchesUsed: preformBatchUsage.length
-              },
-              label: {
-                name: label.bottleName,
-                category: label.bottleCategory,
-                quantity: totalBottles
-              },
-              cap: {
-                type: `${cap.neckType} - ${cap.size} - ${cap.color}`,
-                quantity: totalBottles
-              },
-              shrinkRoll: totalShrinkRoll
-            },
-            output: {
-              boxes: boxesProduced,
-              totalBottles: totalBottles
-            },
-            stockUpdated: product ? true : false,
-            productName: product ? product.name : null
-          },
-          message: "Bottle production recorded and stock updated successfully"
+          message: "Bottle production recorded and stock updated successfully",
+          data: production
         });
 
       } catch (error) {
@@ -1851,10 +1883,37 @@ class StockController {
 
     } catch (error) {
       console.error("Error in bottle production:", error);
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: "Error recording bottle production",
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        error: process.env.NODE_ENV === "development" ? error.message : undefined
+      });
+    }
+  }
+
+  async getBottleCategory(req, res) {
+    try {
+      const products = await Product.find()
+        .select("name type category bottlesPerBox")
+        .lean();
+
+      if (products.length === 0) {
+        return res.status(404).json({
+          status: false,
+          message: "No products found"
+        });
+      }
+
+      return res.status(200).json({
+        status: true,
+        message: "Product fetched successfully",
+        data: products
+      });
+    } catch (error) {
+      console.error("Error while fetching the bottle category", error.message);
+      return res.status(500).json({
+        status: false,
+        message: "Internal Server Error"
       });
     }
   }
@@ -2107,14 +2166,23 @@ class StockController {
 
   async getAvailablePreformTypesForBottle(req, res) {
     try {
-      // Get all preform productions with available stock
-      const preformProductions = await PerformProduction.aggregate([
+      const preforms = await PerformProduction.aggregate([
+        {
+          $match: {
+            type: "preform"
+          }
+        },
         {
           $addFields: {
             available: {
               $subtract: [
                 "$quantityProduced",
-                { $add: [{ $ifNull: ["$wastage", 0] }, { $ifNull: ["$usedInBottles", 0] }] }
+                {
+                  $add: [
+                    { $ifNull: ["$wastageKg", 0] },
+                    { $ifNull: ["$usedInBottles", 0] }
+                  ]
+                }
               ]
             }
           }
@@ -2125,24 +2193,14 @@ class StockController {
           }
         },
         {
-          $group: {
-            _id: "$outcomeType",
-            totalAvailable: { $sum: "$available" },
-            totalProduced: { $sum: "$quantityProduced" },
-            totalUsed: { $sum: { $ifNull: ["$usedInBottles", 0] } },
-            batchCount: { $sum: 1 },
-            lastProductionDate: { $max: "$productionDate" }
-          }
-        },
-        {
           $project: {
             _id: 0,
-            type: "$_id",
-            totalAvailable: 1,
-            totalProduced: 1,
-            totalUsed: 1,
-            batchCount: 1,
-            lastProductionDate: 1
+            preformTypeId: "$_id",        // ✅ REAL ObjectId
+            type: "$outcomeType",         // "500ml"
+            totalAvailable: "$available",
+            totalProduced: "$quantityProduced",
+            totalUsed: { $ifNull: ["$usedInBottles", 0] },
+            lastProductionDate: "$productionDate"
           }
         },
         {
@@ -2150,21 +2208,21 @@ class StockController {
         }
       ]);
 
-      res.status(200).json({
+      return res.status(200).json({
         success: true,
-        data: preformProductions,
-        message: `Found ${preformProductions.length} preform types with available stock`
+        data: preforms,
+        message: `Found ${preforms.length} preform types with available stock`
       });
+
     } catch (error) {
       console.error("Error fetching available preform types:", error);
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: "Error fetching available preform types",
         error: error.message
       });
     }
   }
-
 
   async getProductionBatchesForSelection(req, res) {
     try {
@@ -3098,51 +3156,122 @@ class StockController {
 
   async checkMaterialAvailability(req, res) {
     try {
-      const { preformType, boxes, bottlesPerBox, bottleCategory } = req.query;
+      const {
+        preformTypeId,
+        boxes,
+        bottlesPerBox,
+        bottleCategoryId,
+        labelId,
+        capId
+      } = req.body;
 
-      if (!preformType || !boxes || !bottlesPerBox || !bottleCategory) {
+      // ---------------- BASIC VALIDATION ----------------
+      if (
+        !preformTypeId ||
+        !boxes ||
+        !bottlesPerBox ||
+        !bottleCategoryId ||
+        !labelId ||
+        !capId
+      ) {
         return res.status(400).json({
           success: false,
           message: "All parameters are required"
         });
       }
 
-      const totalBottles = boxes * bottlesPerBox;
+      const totalBottles = Number(boxes) * Number(bottlesPerBox);
 
-      // Check preform availability
-      const preformProductions = await PerformProduction.find({
-        outcomeType: preformType,
-        "quantityProduced": { $gt: 0 }
+      if (!Number.isInteger(totalBottles) || totalBottles <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid box or bottle calculation"
+        });
+      }
+
+      // ==================================================
+      // 1. CHECK PREFORM AVAILABILITY (TYPE LEVEL)
+      // ==================================================
+      const preform = await PerformProduction.findById(preformTypeId)
+        .select("quantityProduced wastageKg usedInBottles outcomeType");
+
+      if (!preform) {
+        return res.status(404).json({
+          success: false,
+          message: "Preform type not found"
+        });
+      }
+
+      const preformsAvailable =
+        preform.quantityProduced -
+        (preform.wastageKg || 0) -
+        (preform.usedInBottles || 0);
+
+      // ==================================================
+      // 2. FETCH BOTTLE CATEGORY (ONLY FOR DISPLAY / VALIDATION)
+      // ==================================================
+      const bottleProduct = await Product.findById(bottleCategoryId)
+        .select("name category");
+
+      if (!bottleProduct) {
+        return res.status(404).json({
+          success: false,
+          message: "Bottle category not found"
+        });
+      }
+
+      // ==================================================
+      // 3. CHECK CAP AVAILABILITY (USING capId)
+      // ==================================================
+      const cap = await Cap.findById(capId)
+        .select("quantityAvailable neckType size color");
+
+      if (!cap) {
+        return res.status(404).json({
+          success: false,
+          message: "Cap not found"
+        });
+      }
+
+      const capsAvailable = cap.quantityAvailable;
+
+      // ==================================================
+      // 4. CHECK SHRINK ROLL
+      // ==================================================
+      const shrinkRollFormula = await Formula.findOne({
+        name: "Shrink Roll per Box"
       });
 
-      let totalPreformsAvailable = 0;
-      preformProductions.forEach(prod => {
-        const available = prod.quantityProduced - (prod.wastage || 0) - (prod.usedInBottles || 0);
-        totalPreformsAvailable += Math.max(0, available);
-      });
+      const shrinkRollPerBox = shrinkRollFormula
+        ? Number(shrinkRollFormula.formula)
+        : 50;
 
-      // Check cap availability
-      const capType = bottleCategory.toLowerCase() === '1l' ? '30mm' : '28mm';
-      const capProductions = await CapProduction.find({
-        capType: capType,
-        "quantityProduced": { $gt: 0 }
-      });
+      const totalShrinkRoll = Number(boxes) * shrinkRollPerBox;
 
-      let totalCapsAvailable = 0;
-      capProductions.forEach(prod => {
-        const available = prod.quantityProduced - (prod.wastage || 0) - (prod.usedInBottles || 0);
-        totalCapsAvailable += Math.max(0, available);
-      });
+      const shrinkRoll = await RawMaterial.findOne({
+        itemCode: "SHRINK_ROLL",
+        isActive: true
+      }).select("currentStock");
 
-      // Check packaging materials
-      const shrinkRollFormula = await Formula.findOne({ name: "Shrink Roll per Box" });
-      const shrinkRollPerBox = shrinkRollFormula ? parseFloat(shrinkRollFormula.formula) : 50;
-      const totalShrinkRoll = boxes * shrinkRollPerBox;
+      // ==================================================
+      // 5. CHECK LABEL AVAILABILITY (USING labelId)
+      // ==================================================
+      const label = await Label.findById(labelId)
+        .select("quantityAvailable bottleName bottleCategory");
 
-      const shrinkRoll = await RawMaterial.findOne({ itemCode: "SHRINK_ROLL", isActive: true });
-      const labels = await RawMaterial.findOne({ itemCode: "LABELS", isActive: true });
+      if (!label) {
+        return res.status(404).json({
+          success: false,
+          message: "Label not found"
+        });
+      }
 
-      res.status(200).json({
+      const labelsAvailable = label.quantityAvailable;
+
+      // ==================================================
+      // FINAL RESPONSE
+      // ==================================================
+      return res.status(200).json({
         success: true,
         data: {
           requirements: {
@@ -3154,37 +3283,45 @@ class StockController {
           },
           availability: {
             preforms: {
-              available: totalPreformsAvailable,
-              sufficient: totalPreformsAvailable >= totalBottles,
-              shortage: Math.max(0, totalBottles - totalPreformsAvailable)
+              type: preform.outcomeType,
+              available: preformsAvailable,
+              sufficient: preformsAvailable >= totalBottles,
+              shortage: Math.max(0, totalBottles - preformsAvailable)
             },
             caps: {
-              type: capType,
-              available: totalCapsAvailable,
-              sufficient: totalCapsAvailable >= totalBottles,
-              shortage: Math.max(0, totalBottles - totalCapsAvailable)
+              type: `${cap.neckType} ${cap.size || ""} ${cap.color || ""}`.trim(),
+              available: capsAvailable,
+              sufficient: capsAvailable >= totalBottles,
+              shortage: Math.max(0, totalBottles - capsAvailable)
             },
             shrinkRoll: {
               available: shrinkRoll ? shrinkRoll.currentStock : 0,
               required: totalShrinkRoll,
-              sufficient: shrinkRoll ? shrinkRoll.currentStock >= totalShrinkRoll : false,
+              sufficient: shrinkRoll
+                ? shrinkRoll.currentStock >= totalShrinkRoll
+                : false,
               unit: "gm"
             },
             labels: {
-              available: labels ? labels.currentStock : 0,
+              name: label.bottleName,
+              category: label.bottleCategory,
+              available: labelsAvailable,
               required: totalBottles,
-              sufficient: labels ? labels.currentStock >= totalBottles : false,
+              sufficient: labelsAvailable >= totalBottles,
               unit: "nos"
             }
           },
-          canProduce: totalPreformsAvailable >= totalBottles &&
-            totalCapsAvailable >= totalBottles &&
+          canProduce:
+            preformsAvailable >= totalBottles &&
+            capsAvailable >= totalBottles &&
             (shrinkRoll ? shrinkRoll.currentStock >= totalShrinkRoll : false) &&
-            (labels ? labels.currentStock >= totalBottles : false)
+            labelsAvailable >= totalBottles
         }
       });
+
     } catch (error) {
-      res.status(500).json({
+      console.error("Error checking material availability:", error);
+      return res.status(500).json({
         success: false,
         message: "Error checking material availability",
         error: error.message
